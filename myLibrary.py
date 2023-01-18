@@ -1,5 +1,4 @@
 from datetime import timedelta
-
 import numpy as np
 import pandas as pd
 
@@ -303,8 +302,6 @@ failed_stations_GOM = ['42084',
 
 
 # Functions
-
-
 # removes files which do not exist for the given year
 # returns cleaned list and list of not available stations
 def clean_station_list(station_numbers, year):
@@ -453,3 +450,58 @@ def drop_NaN_rows_and_cols(df):
     clean_df = df.dropna(axis=1, how='all')  # drop cols if all values are NaN
     clean_df = clean_df.dropna(axis=0, how="all")  # drop rows if all values are NaN
     return clean_df
+
+
+#ERA5 Stuff
+print("Test")
+api_keyfile = open("ERA5/.cdsapirc", "r")
+lines = api_keyfile.readlines()
+url = lines[0].rstrip().replace("url: ", "")
+key = lines[1].rstrip().replace("key: ", "")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
