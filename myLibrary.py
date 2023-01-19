@@ -1,8 +1,10 @@
 from datetime import timedelta
 import numpy as np
 import pandas as pd
+import os
 
 # Data
+from matplotlib import pyplot as plt
 
 stations_GOM = list(("41117",
                      "41112",
@@ -452,39 +454,125 @@ def drop_NaN_rows_and_cols(df):
     return clean_df
 
 
-#ERA5 Stuff
-print("Test")
-api_keyfile = open("ERA5/.cdsapirc", "r")
+# ERA5 Stuff
+import cdsapi
+import math
+
+# API authentication
+api_key_path = f"{os.path.dirname(__file__)}/ERA5/.cdsapirc"
+api_keyfile = open(api_key_path, "r")
 lines = api_keyfile.readlines()
 url = lines[0].rstrip().replace("url: ", "")
 key = lines[1].rstrip().replace("key: ", "")
 
 
+# Download ERA5 Dataset of a single location with 1h timestamps.
+# It contains all the features that are also covered by NDBC!
+# The file will be downloaded and stored in ERA5/ERA5_downloads/singleStations/{station_id}_{year}.nc
+def download_ERA5_singlePoint(station_id, year):
+    # https://stackoverflow.com/questions/65186216/how-to-download-era5-data-for-specific-location-via-python
+    # https://cds.climate.copernicus.eu/cdsapp#!/dataset/reanalysis-era5-single-levels?tab=form
+
+    path = f"{os.path.dirname(__file__)}/ERA5/ERA5_downloads/singleStations/{station_id}_{year}.nc"
+    print(path)
+
+    metadata = pd.read_csv('../data/my_metadata.csv')
+    metadata.set_index("StationID", inplace=True)
+    lat = metadata.loc[station_id.upper()]["lat"]
+    lon = metadata.loc[station_id.upper()]["lon"]
+    coords = [lat, lon] * 2
+
+    c = cdsapi.Client(url, key)
+
+    c.retrieve(
+        'reanalysis-era5-single-levels',
+        {
+            'product_type': 'reanalysis',
+
+            'variable': [
+                # '10m_u_component_of_neutral_wind', '10m_v_component_of_neutral_wind',   # TEST !!
+                '10m_u_component_of_wind', '10m_v_component_of_wind', '2m_dewpoint_temperature',
+                '2m_temperature', 'mean_sea_level_pressure', 'mean_wave_direction',
+                'mean_wave_period', 'sea_surface_temperature', 'significant_height_of_total_swell',
+            ],
+
+            'year': year,
+            'month': [
+                '01', '02', '03', '04', '05', '06',
+                '07', '08', '09', '10', '11', '12',
+            ],
+            'day': [
+                '01', '02', '03', '04', '05', '06', '07', '08', '09', '10',
+                '11', '12', '13', '14', '15', '16', '17', '18', '19', '20',
+                '21', '22', '23', '24', '25', '26', '27', '28', '29', '30', '31',
+            ],
+            'time': [
+                '00:00', '01:00', '02:00', '03:00', '04:00', '05:00',
+                '06:00', '07:00', '08:00', '09:00', '10:00', '11:00',
+                '12:00', '13:00', '14:00', '15:00', '16:00', '17:00',
+                '18:00', '19:00', '20:00', '21:00', '22:00', '23:00',
+            ],
+            # 'area': station_point_coord,  # Area: NORTH, WEST, SOUTH, EAST
+            'area': coords,
+            'format': 'netcdf',
+        },
+        path
+    )
 
 
+# v ... x-axis (North is plus)
+# u ... y-axis (East is plus)
+def calc_WDIR(v, u):
+    alpha = math.atan(u / v)  # angle in triangle of v, u and WSPD vectors
+
+    if v > 0:  # East-Wind
+        WDIR = 90 - alpha
+    else:  # v < 0 ... West-Wind
+        WDIR = 270 - alpha
+
+    return WDIR
 
 
+def calcWSPD(v, u):
+    return math.sqrt((u * u) + (v * v))  # Pythagoras
 
 
+# TODO: For directions, take distance across north into account!
+def compare_NDBC_ERA5(df_NDBC, df_ERA5):
+    features = list(df_NDBC.columns.values)
+
+    delta_absolute = pd.DataFrame({"timestamp": df_NDBC.index})
+    delta_absolute.set_index("timestamp", inplace=True)
+
+    delta_relative = delta_absolute.copy(deep=True)
+
+    for feature in features:
+        # for directions, also consider distance across north
+        if feature.startswith("WDIR") or feature.startswith("MWD"):
+
+            delta_corrected = []
+            for value1, value2 in zip(df_NDBC[feature], df_ERA5[feature]):
+                delta = abs(value1 - value2)
+                if delta > 180:
+                    delta = abs(value1 + value2 - 360)
+                delta_corrected.append(delta)
+
+            delta_absolute[feature] = delta_corrected
+
+        else:
+            delta_absolute[feature] = df_NDBC[feature] - df_ERA5[feature]
+            delta_relative[feature] = round(delta_absolute[feature] * 100 / df_NDBC[feature],
+                                            2)  # deviation from NDBC data in %
+    return delta_absolute, delta_relative
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+def plot_parameter_comparison(data_ndbc, data_era5, title):
+    plt.figure().set_figwidth(30)
+    plt.plot(data_ndbc, label="NDBC", linewidth=0.5)
+    plt.plot(data_era5, label="ERA5", linewidth=0.5)
+    plt.title(title)
+    plt.legend()
+    plt.show()
 
 
 
