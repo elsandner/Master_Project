@@ -687,5 +687,3 @@ def plot_parameter_comparison(data_ndbc, data_era5, title):
 
 
 
-
-
