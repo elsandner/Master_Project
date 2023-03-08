@@ -3,7 +3,8 @@
 .idea/*
 .idea
 data/*
+__pycache__
 NDBC_Buoy_Data/__pycache__/
 ERA5/.cdsapirc
 ERA5/ERA5_downloads/*
-__pycache__
+

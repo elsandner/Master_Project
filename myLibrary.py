@@ -2,6 +2,8 @@ from datetime import timedelta
 import numpy as np
 import pandas as pd
 import os
+from datetime import datetime
+import netCDF4 as nc
 
 # Data
 from matplotlib import pyplot as plt
@@ -328,7 +330,7 @@ def clean_station_list(station_numbers, year):
 
 # get stdmet (=Standard Meteorological) data by station and year
 # Params: station_number: string, year: string
-# return: if exists: tuple(station_number: str, data: dataframe
+# return: if exists: tuple(station_number: str, data: dataframe)
 def get_data_file(station_number, year):
     base_url = "https://www.ndbc.noaa.gov/data/historical/stdmet/"
     filename = station_number + "h" + year + ".txt.gz"
@@ -388,16 +390,27 @@ def build_dataset(station_numbers, year):
     return merged_data
 
 
+
+
 # Parameter example:
 # first_timestamp = datetime.strptime("2020-07-01 00:00", '%Y-%m-%d %H:%M')
 # last_timestamp = datetime.strptime("2020-08-01 00:00", '%Y-%m-%d %H:%M')
-def create_timestamp_list(first_timestamp, last_timestamp):
+def create_timestamp_list(first_timestamp, last_timestamp):  # TODO: could be replaced with simplified function below!
     timestamps = list()
     while first_timestamp != last_timestamp:
         timestamps.append(first_timestamp)
         first_timestamp = first_timestamp + timedelta(hours=1)
 
     return timestamps
+
+
+# overload function with simplified parameter
+def create_timestamp_list2(year):
+    first_timestamp = datetime.strptime(f"{year}-01-01 00:00", '%Y-%m-%d %H:%M')
+    following_year = str(int(year) + 1)
+    last_timestamp = datetime.strptime(f"{following_year}-01-01 00:00", '%Y-%m-%d %H:%M')
+    return create_timestamp_list(first_timestamp, last_timestamp)
+
 
 
 # Params:
@@ -473,7 +486,7 @@ def download_ERA5_singlePoint(station_id, year):
     # https://stackoverflow.com/questions/65186216/how-to-download-era5-data-for-specific-location-via-python
     # https://cds.climate.copernicus.eu/cdsapp#!/dataset/reanalysis-era5-single-levels?tab=form
 
-    path = f"{os.path.dirname(__file__)}/ERA5/ERA5_downloads/singleStations/{station_id}_{year}.nc"
+    path = f"{os.path.dirname(__file__)}/data/ERA5_downloads/singleStations/{station_id}_{year}.nc"
     print(path)
 
     metadata = pd.read_csv('../data/my_metadata.csv')
@@ -520,24 +533,105 @@ def download_ERA5_singlePoint(station_id, year):
     )
 
 
+# Reads from memory
+# If file does not exists --> download
+# returns dataframe
+def get_ERA5_singlePoint(station_id, year):
+    path = f"{os.path.dirname(__file__)}/data/ERA5_downloads/singleStations/{station_id}_{year}.nc"
+
+    if not os.path.exists(path):
+        print(f"donwloading {station_id}_{year}.nc ...")
+        download_ERA5_singlePoint(station_id, year)    #only download if not found
+        print(f"Completed download of {station_id}_{year}.nc!")
+
+    ds_ERA5 = nc.Dataset(path)  #read from file
+
+    # handle this strange nc data format and store in list
+    u10 = ds_ERA5.variables["u10"][:, :, 0].data
+    v10 = ds_ERA5.variables["v10"][:, :, 0].data
+    d2m = ds_ERA5.variables["d2m"][:, :, 0].data
+    t2m = ds_ERA5.variables["t2m"][:, :, 0].data
+    msl = ds_ERA5.variables["msl"][:, :, 0].data
+    sst = ds_ERA5.variables["sst"][:, :, 0].data
+    mwd = ds_ERA5.variables["mwd"][:, :, 0].data
+    mwp = ds_ERA5.variables["mwp"][:, :, 0].data
+    shts = ds_ERA5.variables["shts"][:, :, 0].data
+
+    # Convert u,v wind components to direction and speed
+    WDIR = []
+    WSPD = []
+    for v, u in zip(v10, u10):
+        WDIR.append(calc_WDIR(v, u))
+        WSPD.append(calcWSPD(v, u))
+
+    # save to dataframe - same as NDBC data!
+    df_ERA5 = pd.DataFrame({
+        f'WDIR_{station_id}': WDIR,  # WDIR
+        f'WSPD_{station_id}': WSPD,  # WSPD
+        f'DEWP_{station_id}': d2m[:, 0],  # D2M
+        f'ATMP_{station_id}': t2m[:, 0],  # T2M
+        f'PRES_{station_id}': msl[:, 0],  # MSL
+        f'WTMP_{station_id}': sst[:, 0],  # SST
+        f'WVHT_{station_id}': shts[:, 0],  # SHTS
+        f'APD_{station_id}':  mwp[:, 0],  # MWP
+        f'MWD_{station_id}':  mwd[:, 0],  # MWD
+    })
+
+    # Convert to same units as NDBC uses
+    df_ERA5["timestamp"] = create_timestamp_list2(year)
+    df_ERA5.set_index('timestamp', inplace=True)
+    df_ERA5[f"DEWP_{station_id}"] -= 273.15  # convert to degree Celsius
+    df_ERA5[f"ATMP_{station_id}"] -= 273.15
+    df_ERA5[f"PRES_{station_id}"] = df_ERA5[f"PRES_{station_id}"] / 100  # convert Pa to hPa
+    df_ERA5[f"WTMP_{station_id}"] -= 273.15
+
+    return df_ERA5
+
+
 # v ... x-axis (North is plus)
 # u ... y-axis (East is plus)
 def calc_WDIR(v, u):
-    alpha = math.atan(u / v)  # angle in triangle of v, u and WSPD vectors
 
-    if v > 0:  # East-Wind
-        WDIR = 90 - alpha
-    else:  # v < 0 ... West-Wind
-        WDIR = 270 - alpha
+    # No wind at all
+    if v == 0 and u == 0:
+        return np.NAN
 
-    return WDIR
+    # Wind straight to one coordinate direction
+    if v == 0 and u > 0:    # North Wind
+        return 0
+
+    if v == 0 and u < 0:    # South Wind
+        return 180
+
+    if u == 0 and v > 0:    # East Wind
+        return 90
+
+    if u == 0 and v < 0:    # West wind
+        return 270
+
+    # Angle needs to be calculated
+    if u > 0 and v > 0:     # North-East (+u +v)
+        alpha = math.degrees(math.atan(u / v))
+        return 90 - alpha
+
+    if u < 0 and v > 0:     # South-East (-u +v)
+        alpha = math.degrees(math.atan(u / v))
+        return 90 + abs(alpha)
+
+    if u < 0 and v < 0:    # South-West (-u, -v)
+        alpha = math.degrees(math.atan(u / v))
+        return 270 - alpha
+
+    if u > 0 and v < 0:    # North-West (+u, -v)
+        alpha = math.degrees(math.atan(u / v))
+        return 270 + abs(alpha)
 
 
 def calcWSPD(v, u):
     return math.sqrt((u * u) + (v * v))  # Pythagoras
 
 
-# TODO: For directions, take distance across north into account!
+# TODO: For directions, take distance across north into account!    #???
 def compare_NDBC_ERA5(df_NDBC, df_ERA5):
     features = list(df_NDBC.columns.values)
 
@@ -560,14 +654,16 @@ def compare_NDBC_ERA5(df_NDBC, df_ERA5):
             delta_absolute[feature] = delta_corrected
 
         else:
-            delta_absolute[feature] = df_NDBC[feature] - df_ERA5[feature]
-            delta_relative[feature] = round(delta_absolute[feature] * 100 / df_NDBC[feature],
+            delta_absolute[feature] = abs(df_NDBC[feature] - df_ERA5[feature])
+            delta_relative[feature] = round(delta_absolute[feature] * 100 / abs(df_NDBC[feature]),
                                             2)  # deviation from NDBC data in %
     return delta_absolute, delta_relative
 
 
 def plot_parameter_comparison(data_ndbc, data_era5, title):
+    #plt.figure().set_figheight(10)
     plt.figure().set_figwidth(30)
+
     plt.plot(data_ndbc, label="NDBC", linewidth=0.5)
     plt.plot(data_era5, label="ERA5", linewidth=0.5)
     plt.title(title)
