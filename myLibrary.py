@@ -588,9 +588,19 @@ key = lines[1].rstrip().replace("key: ", "")
 # Download ERA5 Dataset of a single location with 1h timestamps.
 # It contains all the features that are also covered by NDBC!
 # The file will be downloaded and stored in ERA5/ERA5_downloads/singleStations/{station_id}_{year}.nc
-def download_ERA5_singlePoint(station_id, year):
+
+default_variables = [
+                # '10m_u_component_of_neutral_wind', '10m_v_component_of_neutral_wind',   # TEST !!
+                '10m_u_component_of_wind', '10m_v_component_of_wind', '2m_dewpoint_temperature',
+                '2m_temperature', 'mean_sea_level_pressure', 'mean_wave_direction',
+                'mean_wave_period', 'sea_surface_temperature', 'significant_height_of_total_swell',
+            ]
+def download_ERA5_singlePoint(station_id, year, variables=None):
     # https://stackoverflow.com/questions/65186216/how-to-download-era5-data-for-specific-location-via-python
     # https://cds.climate.copernicus.eu/cdsapp#!/dataset/reanalysis-era5-single-levels?tab=form
+
+    if variables is None:
+        variables = default_variables
 
     path = f"{os.path.dirname(__file__)}/data/ERA5_downloads/singleStations/{station_id}_{year}.nc"
     print(path)
@@ -608,12 +618,7 @@ def download_ERA5_singlePoint(station_id, year):
         {
             'product_type': 'reanalysis',
 
-            'variable': [
-                # '10m_u_component_of_neutral_wind', '10m_v_component_of_neutral_wind',   # TEST !!
-                '10m_u_component_of_wind', '10m_v_component_of_wind', '2m_dewpoint_temperature',
-                '2m_temperature', 'mean_sea_level_pressure', 'mean_wave_direction',
-                'mean_wave_period', 'sea_surface_temperature', 'significant_height_of_total_swell',
-            ],
+            'variable': variables,
 
             'year': year,
             'month': [
