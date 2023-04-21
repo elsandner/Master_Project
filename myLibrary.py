@@ -336,7 +336,7 @@ def get_data_file(station_number, year):
     base_url = "https://www.ndbc.noaa.gov/data/historical/stdmet/"
     filename = station_number + "h" + year + ".txt.gz"
     url = base_url + filename
-    filepath = f"{os.path.dirname(__file__)}/data/Station_Data_RAW/{station_number}h{year}.csv"
+    filepath = f"{os.path.dirname(__file__)}/data/NDBC_downloads/singleStation/{station_number}h{year}.csv"
 
     # Try to read from memory
     if os.path.isfile(filepath):
@@ -461,6 +461,7 @@ def get_buoy_data(station_id, year):
 # Same as get_buoy_data but for multiple files.
 # Files of several stations and years are properly merged into one DF
 # Furthermore, Download time is meassured and a NaN statistic is created!
+#TODO: Remove statistic
 def build_NDBC_dataset(STATION_LIST, YEARS):
 
     time_ref = time.time()
@@ -573,7 +574,45 @@ def drop_NaN_rows_and_cols(df):
     return clean_df
 
 
-# ERA5 Stuff
+def feature_selection_nan(df: pd.DataFrame , nan_threshold: float):
+    '''
+    Input: Dataframe
+    Threshold: all columns with a nan_rate above the threshold are removed!
+    '''
+    # Calculate the percentage of NaN values in each column
+    nan_percentages = df.isna().sum() / len(df)
+
+    # Select the columns where the percentage of NaN values is below the threshold
+    keep_columns = nan_percentages[nan_percentages <= nan_threshold].index
+
+    # Filter the DataFrame to keep only the selected columns
+    return df[keep_columns]
+
+
+def feature_selection_custom(df: pd.DataFrame, features: list = None):
+    '''
+    :param df: Dataframe with NDBC data. Column header must be of form: FEATURE_STATIONID. Example: WDIR_42036
+    :param features: list with subset of ["WDIR", "WSPD", "WVHT", "APD", "MWD", "PRES", "ATMP", "WTMP", "DEWP"] or None for all features
+    :return: Dataframe with only those features.
+    '''
+    if features == None: return df
+
+    # Get a list of all column headers in the dataframe
+    all_columns = list(df.columns)
+
+    # Keep only the columns whose headers start with one of the valid starts
+    valid_columns = [col for col in all_columns if col.startswith(tuple(features))]
+
+    # Return the dataframe with only the valid columns
+    return df[valid_columns]
+
+#--------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
+################## ERA5 STUFF #########################################################
+#--------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
 import cdsapi
 import math
 
@@ -588,13 +627,14 @@ key = lines[1].rstrip().replace("key: ", "")
 # Download ERA5 Dataset of a single location with 1h timestamps.
 # It contains all the features that are also covered by NDBC!
 # The file will be downloaded and stored in ERA5/ERA5_downloads/singleStations/{station_id}_{year}.nc
-
 default_variables = [
                 # '10m_u_component_of_neutral_wind', '10m_v_component_of_neutral_wind',   # TEST !!
                 '10m_u_component_of_wind', '10m_v_component_of_wind', '2m_dewpoint_temperature',
                 '2m_temperature', 'mean_sea_level_pressure', 'mean_wave_direction',
                 'mean_wave_period', 'sea_surface_temperature', 'significant_height_of_total_swell',
             ]
+
+
 def download_ERA5_singlePoint(station_id, year, variables=None):
     # https://stackoverflow.com/questions/65186216/how-to-download-era5-data-for-specific-location-via-python
     # https://cds.climate.copernicus.eu/cdsapp#!/dataset/reanalysis-era5-single-levels?tab=form
@@ -605,7 +645,8 @@ def download_ERA5_singlePoint(station_id, year, variables=None):
     path = f"{os.path.dirname(__file__)}/data/ERA5_downloads/singleStations/{station_id}_{year}.nc"
     print(path)
 
-    metadata = pd.read_csv('../data/my_metadata.csv')
+    #metadata = pd.read_csv('../data/my_metadata.csv')
+    metadata = pd.read_csv(f"{os.path.dirname(__file__)}/data/metadata/metadata_2023_03_14.csv")
     metadata.set_index("StationID", inplace=True)
     lat = metadata.loc[station_id.upper()]["lat"]
     lon = metadata.loc[station_id.upper()]["lon"]
@@ -652,7 +693,7 @@ def get_ERA5_singlePoint(station_id, year):
 
     if not os.path.exists(path):
         print(f"donwloading {station_id}_{year}.nc ...")
-        download_ERA5_singlePoint(station_id, year)    #only download if not found
+        download_ERA5_singlePoint(station_id, year)    # only download if not found
         print(f"Completed download of {station_id}_{year}.nc!")
 
     ds_ERA5 = nc.Dataset(path)  #read from file
@@ -697,6 +738,37 @@ def get_ERA5_singlePoint(station_id, year):
     df_ERA5[f"WTMP_{station_id}"] -= 273.15
 
     return df_ERA5
+
+
+
+# Creates equivalent of build_NDBC_dataset.
+# Considered Feeatures: ["WDIR", "WSPD", "WVHT", "APD", "MWD", "PRES", "ATMP", "WTMP", "DEWP"]
+# Timesteps: 1h
+
+def build_ERA5_dataset(stations: list, years: list):
+
+    time_ref = time.time()
+
+    data_list_annual = list()    # each element in this list is a df containing data of one certain year and all locations
+    for year in years:
+        print("Started with ", year, ". Previous year took:  ", time.time() - time_ref , "seconds")
+        time_ref = time.time()
+
+        point_data_list = list() # each element in this list is a df containing data of one certain year and one certain station.
+        for station in stations:
+
+            #buoy_data = get_buoy_data(station, year)  # load file
+            point_data = get_ERA5_singlePoint(station, year)
+            point_data_list.append(point_data)
+
+        merged_buoy_data = pd.concat(point_data_list, axis=1, join="outer")  # outer join also includes NaN, inner join removes them
+        data_list_annual.append(merged_buoy_data)
+
+    print("Finished downloading - now merging it together!")
+
+    df = pd.concat(data_list_annual, axis=0)
+
+    return df
 
 
 # v ... x-axis (North is plus)
@@ -782,7 +854,46 @@ def plot_parameter_comparison(data_ndbc, data_era5, title):
     plt.show()
 
 
+# This function prepares a Dataset ready for training a neural network
+# Inkl. NaN imputation
+# Each row is a instance identified by a timestamp. Timestep = 1h
+# Each column is a feature. feture name: FEATURE_STATIONID
+# Features can be selected by providing a subset of:
+# ["WDIR", "WSPD", "WVHT", "APD", "MWD", "PRES", "ATMP", "WTMP", "DEWP"] or None for all features
+# Features with a nan rate above the threshold are removed
+# If ERA5 = True, all ERA5 equivalents are loaded. ERA5 features are marked with the prefix _ERA5
+# Inkl. NaN imputation
+def get_data(stations: list, years:list,
+             nan_threshold: float,             #0..1 percentage of NaN values to drop feature
+             features: list = None,
+             ERA5: bool = False):
+    #GET_NDBC
+    data_NDBC, NaN_Statistic = build_NDBC_dataset(stations, years)
 
+    #Feature selection by NaN threshold
+    data_NDBC = feature_selection_nan(data_NDBC, nan_threshold)
+
+    # Feature Selection by parameter
+    data_NDBC = feature_selection_custom(data_NDBC, features)
+
+    #NaN imputation
+    #TODO: implement several nan imputation algorithms and a function to select it by parameter
+    data_NDBC.fillna(method='ffill', inplace=True)
+    data_NDBC.fillna(method='bfill', inplace=True)
+
+    if not ERA5: return data_NDBC
+
+    #GET_ERA5
+    data_ERA5 = build_ERA5_dataset(stations, years)  #IMPLEMENT
+
+    #MERGE DATA
+    feature_cols = list(set(data_NDBC.columns).intersection(set(data_ERA5.columns)))
+    merged_df = data_NDBC.copy()     # create a new dataframe with columns from ndbc
+    for col in feature_cols:         # add columns from era5 where the names match
+        new_col_name = col + '_era5'
+        merged_df[new_col_name] = data_ERA5[col]
+
+    return merged_df
 
 
 
