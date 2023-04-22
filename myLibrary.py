@@ -5,10 +5,18 @@ import os
 from datetime import datetime
 import netCDF4 as nc
 import time
+from matplotlib import pyplot as plt
+from sklearn.preprocessing import MinMaxScaler
+
+#--------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
+################## NDBC STUFF #########################################################
+#--------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
 
 # Data
-from matplotlib import pyplot as plt
-
 stations_GOM = ['41117',
  '41112',
  '42001',
@@ -756,8 +764,6 @@ def build_ERA5_dataset(stations: list, years: list):
 
         point_data_list = list() # each element in this list is a df containing data of one certain year and one certain station.
         for station in stations:
-
-            #buoy_data = get_buoy_data(station, year)  # load file
             point_data = get_ERA5_singlePoint(station, year)
             point_data_list.append(point_data)
 
@@ -866,7 +872,7 @@ def plot_parameter_comparison(data_ndbc, data_era5, title):
 def get_data(stations: list, years:list,
              nan_threshold: float,             #0..1 percentage of NaN values to drop feature
              features: list = None,
-             ERA5: bool = False):
+             era5: bool = False):
     #GET_NDBC
     data_NDBC, NaN_Statistic = build_NDBC_dataset(stations, years)
 
@@ -881,31 +887,139 @@ def get_data(stations: list, years:list,
     data_NDBC.fillna(method='ffill', inplace=True)
     data_NDBC.fillna(method='bfill', inplace=True)
 
-    if not ERA5: return data_NDBC
+    if not era5: return data_NDBC
 
     #GET_ERA5
-    data_ERA5 = build_ERA5_dataset(stations, years)  #IMPLEMENT
+    data_ERA5 = build_ERA5_dataset(stations, years)
 
     #MERGE DATA
     feature_cols = list(set(data_NDBC.columns).intersection(set(data_ERA5.columns)))
     merged_df = data_NDBC.copy()     # create a new dataframe with columns from ndbc
     for col in feature_cols:         # add columns from era5 where the names match
-        new_col_name = col + '_era5'
+        new_col_name = col + '_ERA5'
         merged_df[new_col_name] = data_ERA5[col]
 
     return merged_df
 
 
+#--------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
+################## DATA PREPARATION (prepare data as NN input) ########################
+#--------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
+
+def data_to_stationary(data: pd.DataFrame, n: int =1):
+    data_stationary = pd.DataFrame()
+
+    for col in data.columns:
+        data_stationary[col] = data[col] - data[col].shift(n)  # y = value(i) - value(i-n)
+
+    data_stationary = data_stationary.iloc[n:]  # remove first n entries since there is no delta value for them
+    return data_stationary
+
+
+# Frame a time series as a supervised learning dataset.
+# Arguments:
+# data: Sequence of observations as a pd.Dataframe
+# n_in: Number of lag observations as input (X).
+# n_out: Number of observations as output (y).
+# dropnan: Boolean whether or not to drop rows with NaN values.
+# Returns:
+# Pandas DataFrame of series framed for supervised learning.
+# https://machinelearningmastery.com/convert-time-series-supervised-learning-problem-python/
+def data_to_supervised(data, n_in=1, n_out=1, dropnan=True):
+    n_vars = data.shape[1]
+    col_names = data.columns
+
+    cols, names = list(), list()
+    # input sequence (t-n, ... t-1)
+    for i in range(n_in, 0, -1):
+        cols.append(data.shift(i))
+        names += [('%s(t-%d)' % (col_names[j], i)) for j in range(n_vars)]
+        # forecast sequence (t, t+1, ... t+n)
+
+    for i in range(0, n_out):
+        cols.append(data.shift(-i))
+        if i == 0:
+            names += [('%s(t)' % (col_names[j])) for j in range(n_vars)]
+        else:
+            names += [('%s(t+%d)' % (col_names[j], i)) for j in range(n_vars)]
+        # put it all together
+        agg = pd.concat(cols, axis=1)
+        agg.columns = names
+        # drop rows with NaN values
+
+    if dropnan:
+        agg.dropna(inplace=True)
+    return agg
+
+
+# Input:
+# Dataframe existing of columns that follow the following name convention:
+# input values are marked with suffix: t-n
+# output is marked with suffix: t or t+n
+# depending on the suffix, the data is seperated into input (X) and output (y)
+# Furthermore, the data is devided into train and test. The last n_test_hours rows represent the test set.
+# Return:
+#   train_X, test_X: numpy.array
+#   train_y, test_y: pd.Dataframe
+def train_test_split(data: pd.DataFrame, n_test_hours: int):
+    # split into train and test sets
+    values = data.values
+    train = values[n_test_hours:, :]
+    test = values[:n_test_hours, :]
+
+    # get indices of input and output columns
+    input_cols = [i for i in range(values.shape[1]) if 't-' in data.columns[i]]
+    output_cols = [i for i in range(values.shape[1]) if ('(t)' in data.columns[i]) or ('t+' in data.columns[i])]
+
+    # split into input and outputs
+    train_X, train_y = train[:, input_cols], train[:, output_cols]
+    test_X, test_y = test[:, input_cols], test[:, output_cols]
+
+    # reshape input to be 3D [samples, timesteps, features]
+    train_X = train_X.reshape((train_X.shape[0], 1, train_X.shape[1]))
+    test_X = test_X.reshape((test_X.shape[0], 1, test_X.shape[1]))
+
+    return train_X, train_y, test_X, test_y
 
 
 
+# Scales the complete data on a scale between -1 and 1
+# Only considers training data to train scalar
+# Returns data in the same shape and the scaler which is needed to inverse the scaling!
+def scale_data(train_X, train_y, test_X, test_y):
+    # Reshape data to 2D arrays
+    train_X_2d = train_X.reshape(train_X.shape[0], -1)
+    train_y_2d = train_y.reshape(train_y.shape[0], -1)
+    test_X_2d = test_X.reshape(test_X.shape[0], -1)
+    test_y_2d = test_y.reshape(test_y.shape[0], -1)
 
+    # Define scaler
+    scaler = MinMaxScaler(feature_range=(-1, 1))
 
+    # Fit scaler on training data
+    scaler.fit(train_X_2d)
 
+    # Scale training and testing data
+    train_X_scaled = scaler.transform(train_X_2d).reshape(train_X.shape)
+    train_y_scaled = scaler.transform(train_y_2d).reshape(train_y.shape)
+    test_X_scaled = scaler.transform(test_X_2d).reshape(test_X.shape)
+    test_y_scaled = scaler.transform(test_y_2d).reshape(test_y.shape)
 
+    return train_X_scaled, train_y_scaled, test_X_scaled, test_y_scaled, scaler
 
+# Inverses function to scale_data for predictions
+def invert_scaling(predictions, scaler):
+    # Reshape predictions to 2D arrays
+    predictions_2d = predictions.reshape(predictions.shape[0], -1)
 
+    # Invert scaling of predictions
+    inverted_2d = scaler.inverse_transform(predictions_2d)
 
+    # Reshape predictions to match original shape
+    inverted = inverted_2d.reshape(predictions.shape)
 
-
-
+    return inverted
