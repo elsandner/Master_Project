@@ -338,13 +338,13 @@ def clean_station_list(station_numbers, year):
 
 
 # get stdmet (=Standard Meteorological) data by station and year
-# Params: station_number: string, year: string
-# return: if exists: tuple(station_number: str, data: dataframe)
-def get_data_file(station_number, year):
+# Params: station_id: string, year: string
+# return: if exists: tuple(station_id: str, data: dataframe)
+def get_data_file(station_id, year):
     base_url = "https://www.ndbc.noaa.gov/data/historical/stdmet/"
-    filename = station_number + "h" + year + ".txt.gz"
+    filename = station_id + "h" + year + ".txt.gz"
     url = base_url + filename
-    filepath = f"{os.path.dirname(__file__)}/data/NDBC_downloads/singleStation/{station_number}h{year}.csv"
+    filepath = f"{os.path.dirname(__file__)}/data/NDBC_downloads/singleStation/{station_id}h{year}.csv"
 
     # Try to read from memory
     if os.path.isfile(filepath):
@@ -353,7 +353,7 @@ def get_data_file(station_number, year):
         # in memory, the index is duplicated ... remove column "Unnamed: 0"
         df_data.drop(df_data.columns[0], axis=1, inplace=True)
         print("from disc")
-        return station_number, df_data  # return as tuple
+        return station_id, df_data  # return as tuple
     else:
         # try to download
         try:
@@ -362,7 +362,7 @@ def get_data_file(station_number, year):
             # save to memory
             df_data.to_csv(filepath, index=True)
 
-            return station_number, df_data  # return as tuple
+            return station_id, df_data  # return as tuple
 
         # Not in memory and can not be downloaded
         except BaseException as e:
@@ -635,12 +635,6 @@ key = lines[1].rstrip().replace("key: ", "")
 # Download ERA5 Dataset of a single location with 1h timestamps.
 # It contains all the features that are also covered by NDBC!
 # The file will be downloaded and stored in ERA5/ERA5_downloads/singleStations/{station_id}_{year}.nc
-default_variables = [
-                # '10m_u_component_of_neutral_wind', '10m_v_component_of_neutral_wind',   # TEST !!
-                '10m_u_component_of_wind', '10m_v_component_of_wind', '2m_dewpoint_temperature',
-                '2m_temperature', 'mean_sea_level_pressure', 'mean_wave_direction',
-                'mean_wave_period', 'sea_surface_temperature', 'significant_height_of_total_swell',
-            ]
 
 
 def download_ERA5_singlePoint(station_id, year, variables=None):
@@ -648,12 +642,15 @@ def download_ERA5_singlePoint(station_id, year, variables=None):
     # https://cds.climate.copernicus.eu/cdsapp#!/dataset/reanalysis-era5-single-levels?tab=form
 
     if variables is None:
-        variables = default_variables
+        variables = [
+                '10m_u_component_of_wind', '10m_v_component_of_wind', '2m_dewpoint_temperature',
+                '2m_temperature', 'mean_sea_level_pressure', 'mean_wave_direction',
+                'mean_wave_period', 'sea_surface_temperature', 'significant_height_of_total_swell',
+            ]
 
     path = f"{os.path.dirname(__file__)}/data/ERA5_downloads/singleStations/{station_id}_{year}.nc"
-    print(path)
 
-    #metadata = pd.read_csv('../data/my_metadata.csv')
+    #Read Metadata
     metadata = pd.read_csv(f"{os.path.dirname(__file__)}/data/metadata/metadata_2023_03_14.csv")
     metadata.set_index("StationID", inplace=True)
     lat = metadata.loc[station_id.upper()]["lat"]
@@ -706,7 +703,7 @@ def get_ERA5_singlePoint(station_id, year):
 
     ds_ERA5 = nc.Dataset(path)  #read from file
 
-    # handle this strange nc data format and store in list
+    # Extract data from .nc file
     u10 = ds_ERA5.variables["u10"][:, :, 0].data
     v10 = ds_ERA5.variables["v10"][:, :, 0].data
     d2m = ds_ERA5.variables["d2m"][:, :, 0].data
@@ -772,9 +769,9 @@ def build_ERA5_dataset(stations: list, years: list):
 
     print("Finished downloading - now merging it together!")
 
-    df = pd.concat(data_list_annual, axis=0)
+    dataset_ERA5 = pd.concat(data_list_annual, axis=0)
 
-    return df
+    return dataset_ERA5
 
 
 # v ... x-axis (North is plus)
@@ -910,6 +907,9 @@ def get_data(stations: list, years:list,
 #--------------------------------------------------------------------------------------
 #--------------------------------------------------------------------------------------
 
+
+#Differenciates the data. It replaces each value with the diference to the previous value.
+#First row is removed
 def data_to_stationary(data: pd.DataFrame, n: int =1):
     data_stationary = pd.DataFrame()
 
@@ -919,6 +919,30 @@ def data_to_stationary(data: pd.DataFrame, n: int =1):
     data_stationary = data_stationary.iloc[n:]  # remove first n entries since there is no delta value for them
     return data_stationary
 
+
+#Inverting data_to_stationary
+#Input:
+#data_stationary: Stationary time series
+#first column: Row of ture observations. Initial value before time series
+    #Usually: data.iloc[-len(data_stationary)-1]
+#returns a numpy array with absolute instead of differenced values!
+#Not usable for one-shot-forecasting!!
+def stationary_to_data(data_stationary: np.array, first_row: pd.Series, n: int = 1):
+    #Copy data
+    data = data_stationary.copy()
+
+    #Fill with initial values
+    for col in range(data.shape[1]):
+        data[0][col] = data[0][col] + first_row[col]
+
+
+
+    #Loop columns and add stationary value (=dif) to previous value
+    for row in range(n, data.shape[0]):   #loop rows
+        for col in range(data.shape[1]):   #loop cols
+            data[row][col] = data[row][col] + data[row-n][col]  #value(t) = value(t-1) + value_stationary(t)
+
+    return data
 
 # Frame a time series as a supervised learning dataset.
 # Arguments:
@@ -967,13 +991,12 @@ def data_to_supervised(data, n_in=1, n_out=1, dropnan=True):
 #   train_y, test_y: pd.Dataframe
 def train_test_split(data: pd.DataFrame, n_test_hours: int):
     # split into train and test sets
-    values = data.values
-    train = values[n_test_hours:, :]
-    test = values[:n_test_hours, :]
+    train = data.head(-168).values
+    test = data.tail(168).values
 
     # get indices of input and output columns
-    input_cols = [i for i in range(values.shape[1]) if 't-' in data.columns[i]]
-    output_cols = [i for i in range(values.shape[1]) if ('(t)' in data.columns[i]) or ('t+' in data.columns[i])]
+    input_cols = [i for i in range(data.values.shape[1]) if 't-' in data.columns[i]]
+    output_cols = [i for i in range(data.values.shape[1]) if ('(t)' in data.columns[i]) or ('t+' in data.columns[i])]
 
     # split into input and outputs
     train_X, train_y = train[:, input_cols], train[:, output_cols]
@@ -1023,3 +1046,4 @@ def invert_scaling(predictions, scaler):
     inverted = inverted_2d.reshape(predictions.shape)
 
     return inverted
+
