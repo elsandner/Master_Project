@@ -506,7 +506,6 @@ class NDBC_lib:
     # Same as get_buoy_data but for multiple files.
     # Files of several stations and years are properly merged into one DF
     # Furthermore, Download time is meassured and a NaN statistic is created!
-    #TODO: Remove statistic
     @staticmethod
     def build_NDBC_dataset(STATION_LIST, YEARS):
 
@@ -874,7 +873,7 @@ def plot_parameter_comparison(data_ndbc, data_era5, title):
     plt.show()
 
 
-def get_data(stations: list, years:list,
+def get_data_A(stations: list, years:list,
              nan_threshold: float,             #0..1 percentage of NaN values to drop feature
              features: list = None,
              era5: bool = False):
@@ -1126,7 +1125,7 @@ class Experiment():
         )
 
     def get_raw_data(self):
-        data = get_data(
+        data = get_data_A(
             stations=self.stations,
             years=self.years,
             nan_threshold=self.nan_threshold,
