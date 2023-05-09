@@ -9,6 +9,7 @@ from matplotlib import pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
 import cdsapi
 import math
+from typing import Union
 
 from dataclasses import dataclass
 import re
@@ -23,24 +24,22 @@ from keras import backend as K
 ################## GENERAL STUFF #########################################################
 #--------------------------------------------------------------------------------------
 
-# Parameter example:
-# first_timestamp = datetime.strptime("2020-07-01 00:00", '%Y-%m-%d %H:%M')
-# last_timestamp = datetime.strptime("2020-08-01 00:00", '%Y-%m-%d %H:%M')
-def create_timestamp_list(first_timestamp, last_timestamp):  # TODO: could be replaced with simplified function below!
+measurements = ["WDIR", "WSPD", "WVHT", "APD", "MWD", "PRES", "ATMP", "WTMP", "DEWP"]
+
+#creates a list of all full hour timestamps of the given year
+def create_timestamp_list(year):
+    first_timestamp = datetime.strptime(f"{year}-01-01 00:00", '%Y-%m-%d %H:%M')
+    following_year = str(int(year) + 1)
+    last_timestamp = datetime.strptime(f"{following_year}-01-01 00:00", '%Y-%m-%d %H:%M')
+
+    #return create_timestamp_list(first_timestamp, last_timestamp)
+
     timestamps = list()
     while first_timestamp != last_timestamp:
         timestamps.append(first_timestamp)
         first_timestamp = first_timestamp + timedelta(hours=1)
 
     return timestamps
-
-
-# overload function with simplified parameter
-def create_timestamp_list2(year):
-    first_timestamp = datetime.strptime(f"{year}-01-01 00:00", '%Y-%m-%d %H:%M')
-    following_year = str(int(year) + 1)
-    last_timestamp = datetime.strptime(f"{following_year}-01-01 00:00", '%Y-%m-%d %H:%M')
-    return create_timestamp_list(first_timestamp, last_timestamp)
 
 
 #--------------------------------------------------------------------------------------
@@ -362,7 +361,7 @@ class NDBC_lib:
                 df_data = pd.read_csv(url, delim_whitespace=True, low_memory=False)
                 cleaned_list.append(station_number)
             except BaseException as e:
-                print('Failed to get file: {}'.format(e))
+                print(f'Failed to get {filename}: {e}')
                 not_found_list.append(station_number)
 
         return cleaned_list, not_found_list
@@ -374,6 +373,9 @@ class NDBC_lib:
     @staticmethod
     def get_data_file(station_id, year):
         base_url = "https://www.ndbc.noaa.gov/data/historical/stdmet/"
+
+        #station_ID to lowercase:
+        station_id = ''.join(char.lower() if char.isalpha() else char for char in station_id)
 
         #filename = station_id + "h" + year + ".txt.gz"
         filename = f"{station_id}h{year}.txt.gz"
@@ -400,7 +402,8 @@ class NDBC_lib:
 
             # Not in memory and can not be downloaded
             except BaseException as e:
-                print('Failed to get file: {}'.format(e))
+                print(f'Failed to get {filename}: {e}')
+                #print('Failed to get file: {}'.format(e))
                 return None
 
 
@@ -417,12 +420,44 @@ class NDBC_lib:
         df = df.drop(labels=0, axis=0)  # drop row with units
 
         # replace time columns with timestamp index
+
+        # Some dataframes use slightly different headers
+        if 'YYYY' in df.columns:
+            df = df.rename(columns={'YYYY': '#YY'})     # e.g. 31201h2005
+        if 'YY' in df.columns:
+            df = df.rename(columns={'YY': '#YY'})       # e.g. 3201h1984
+        if 'WD' in df.columns:
+            df = df.rename(columns={'WD': 'WDIR'})      # e.g. 31201h2005
+        if "mm" not in df.columns:                      # missing minutes e.g. 32301h1984
+            df.loc[:, "mm"] = "00"
+        if 'BAR' in df.columns:
+            df = df.rename(columns={'BAR': 'PRES'})       # e.g. 41112h2007
+
+        # In some dataframes (at least one--> 31201h2005) those columns are int64 instead of string!
+        df['#YY'] = df['#YY'].astype(str)
+        df['MM'] = df['MM'].astype(str)
+        df['DD'] = df['DD'].astype(str)
+        df['hh'] = df['hh'].astype(str)
+        df['mm'] = df['mm'].astype(str)
+
+        # check year component length and add "19" if necessary e.g. 32301h1984
+        #TODO (non-urgant): this could also be 20 in some cases!
+        df['#YY'] = ['19' + yy if len(yy) == 2 else yy for yy in df['#YY']]
+
         df['timestamp'] = df['#YY'] + "-" \
                           + df['MM'] + "-" \
                           + df['DD'] + " " \
                           + df['hh'] + ":" \
                           + df['mm']
-        df['timestamp'] = pd.to_datetime(df['timestamp'], format='%Y-%m-%d %H:%M')
+
+        for i, row in df.iterrows():
+            try:
+                df.at[i, 'timestamp'] = pd.to_datetime(row['timestamp'], format='%Y-%m-%d %H:%M')
+            except ValueError as e:
+                #Needed to handle unit-rows within the dataset!
+                print("VALUE ERROR: ", e, " - DROPPED ROW")
+                df.drop(i, inplace=True)
+
         df.drop(columns=['#YY', 'MM', 'DD', 'hh', 'mm'], inplace=True)
         df.set_index('timestamp', inplace=True)
 
@@ -460,8 +495,12 @@ class NDBC_lib:
     #   delete columns which are not covered by ERA5
     #   if file does not exist, a empty DF is returned
     @staticmethod
-    def get_buoy_data(station_id, year):
-        timestamp_filter_list = create_timestamp_list2(year)
+    #def get_buoy_data(station_id, year):     Renamed to:
+    def get_NDBC_singleStation(station_id, year):
+        # station_ID to lowercase:
+        station_id = ''.join(char.lower() if char.isalpha() else char for char in station_id)
+
+        timestamp_filter_list = create_timestamp_list(year)
         df_NDBC = NDBC_lib.get_data_file(station_id, year)
 
         if df_NDBC is None:
@@ -488,10 +527,15 @@ class NDBC_lib:
             df_NDBC = df_NDBC.loc[~df_NDBC.index.duplicated(keep='first')]
 
             df_NDBC = df_NDBC.filter(timestamp_filter_list, axis=0)
-            df_NDBC.drop([f'GST_{station_id}',
-                          f'DPD_{station_id}',
-                          f'VIS_{station_id}',
-                          f'TIDE_{station_id}'], axis=1, inplace=True)
+
+            if f'GST_{station_id}' in df_NDBC.columns:
+                df_NDBC.drop(f'GST_{station_id}', axis=1, inplace=True)
+            if f'DPD_{station_id}' in df_NDBC.columns:
+                df_NDBC.drop(f'DPD_{station_id}', axis=1, inplace=True)
+            if f'VIS_{station_id}' in df_NDBC.columns:
+                df_NDBC.drop(f'VIS_{station_id}', axis=1, inplace=True)
+            if f'TIDE_{station_id}' in df_NDBC.columns:
+                df_NDBC.drop(f'TIDE_{station_id}', axis=1, inplace=True)
 
         # some data rows are missed. Those are filled up with NaN:
         for timestamp in timestamp_filter_list:
@@ -499,11 +543,11 @@ class NDBC_lib:
                 df_NDBC.loc[timestamp] = [np.NAN] * 9
 
         df_NDBC.sort_index(inplace=True)
-        df_NDBC = df_NDBC.astype(float)  # convert string to float
+        df_NDBC = df_NDBC.apply(pd.to_numeric, errors='coerce') #convert to numeric (int or float, non numeric strings will be converted to NaN
         return df_NDBC
 
 
-    # Same as get_buoy_data but for multiple files.
+    # Same as get_NDBC_singleStation but for multiple files.
     # Files of several stations and years are properly merged into one DF
     # Furthermore, Download time is meassured and a NaN statistic is created!
     @staticmethod
@@ -526,7 +570,7 @@ class NDBC_lib:
 
             buoy_data_list = list() # each element in this list is a df containing data of one certain year and one certain station.
             for station in STATION_LIST:
-                buoy_data = NDBC_lib.get_buoy_data(station, year)  # load file
+                buoy_data = NDBC_lib.get_NDBC_singleStation(station, year)  # load file
                 buoy_data_list.append(buoy_data)
 
                 #Create NaN Statistic
@@ -552,7 +596,6 @@ class NDBC_lib:
     @staticmethod
     def replace_with_NaN(df, value_list=None):
         if value_list is None:
-            # TODO: doublecheck if this list is complete.
             value_list = ['9999', '999', '99', '9999.0', '999.0', '99.0', '9999.00', '999.00', '99.00', '9.9']
 
         new_df = df
@@ -706,6 +749,9 @@ class ERA5_lib:
     # returns dataframe
     @staticmethod
     def get_ERA5_singlePoint(station_id, year):
+        #station_ID to lowercase:
+        station_id = ''.join(char.lower() if char.isalpha() else char for char in station_id)
+
         path = f"{os.path.dirname(__file__)}/data/ERA5_downloads/singleStation/{station_id}_{year}.nc"
 
         if not os.path.exists(path):
@@ -747,7 +793,7 @@ class ERA5_lib:
         })
 
         # Convert to same units as NDBC uses
-        df_ERA5["timestamp"] = create_timestamp_list2(year)
+        df_ERA5["timestamp"] = create_timestamp_list(year)
         df_ERA5.set_index('timestamp', inplace=True)
         df_ERA5[f"DEWP_{station_id}"] -= 273.15  # convert to degree Celsius
         df_ERA5[f"ATMP_{station_id}"] -= 273.15
@@ -833,7 +879,7 @@ class ERA5_lib:
 ################## COMPARE NDBC and ERA5 ##############################################
 #--------------------------------------------------------------------------------------
 
-# TODO: For directions, take distance across north into account!    #???
+# TODO (non-urgant) : For directions, take distance across north into account!    #???
 def compare_NDBC_ERA5(df_NDBC, df_ERA5):
     features = list(df_NDBC.columns.values)
 
@@ -916,6 +962,64 @@ def get_data_A(stations: list, years:list,
 
     return merged_df
 
+
+def get_NDBC_and_ERA5(station_id, year, features=None, add_ERA5=True):
+    station_id = station_id.lower()
+
+    # Get NDBC
+    data_NDBC = NDBC_lib.get_NDBC_singleStation(station_id, year)
+
+    # Feature selection by parameter
+    if features == None:
+        features = measurements
+    data_NDBC = data_NDBC[[f"{feature}_{station_id}" for feature in features]]
+
+    if not add_ERA5:
+        return data_NDBC
+
+    # Get ERA5
+    data_ERA5 = ERA5_lib.get_ERA5_singlePoint(station_id, year)
+
+    # Merge NDBC and ERA5
+    data = data_NDBC.copy()
+    for col in data.columns:         # add columns from era5 where the names match
+        new_col_name = col + '_ERA5'
+        data[new_col_name] = data_ERA5[col]
+
+    data.columns = data.columns.str.replace(f'_{station_id}', '')
+    return data
+
+
+def get_data_B(files, features=None, n_in=1, n_out=1, nan_threshold=1, add_ERA5=True):
+
+    # build dataset
+    data_list = []
+    for file in files:
+        station_id = file[0]
+        year = file[1]
+        data = get_NDBC_and_ERA5(station_id, year, features, add_ERA5)
+        data_list.append(data)
+
+    dataset = pd.concat(data_list, axis=0)
+
+    # feature selection by NaN rate
+    nan_percentages = dataset.isna().sum() / len(dataset)
+    remove_columns = nan_percentages[nan_percentages > nan_threshold].index
+    for col in dataset.columns:
+        for string in remove_columns:
+            if col.startswith(string):  # to also cover _ERA5 columns!
+                dataset.drop(columns=col, inplace=True)
+
+    # dataset to supervised
+    dataset = DataProcessor.data_to_supervised(dataset, n_in, n_out, dropnan=False)
+
+    # Drop rows with NaN values
+    n_rows_before = dataset.shape[0]
+    dataset.dropna(axis=0, inplace=True)
+    n_removed_rows = n_rows_before - dataset.shape[0]
+    print(f"Removed {n_removed_rows} rows with NaN values!")
+
+    return dataset
 
 #--------------------------------------------------------------------------------------
 ################## DATA PREPARATION (prepare data as NN input) ########################
@@ -1007,8 +1111,8 @@ class DataProcessor:
     @staticmethod
     def train_test_split(data: pd.DataFrame, n_test_hours: int):
         # split into train and test sets
-        train = data.head(-168).values
-        test = data.tail(168).values
+        train = data.head(-n_test_hours).values
+        test = data.tail(n_test_hours).values
 
         # get indices of input and output columns
         input_cols = [i for i in range(data.values.shape[1]) if 't-' in data.columns[i]]
@@ -1067,7 +1171,8 @@ class DataProcessor:
 #--------------------------------------------------------------------------------------
 ################## EXPERIMENT-DATA-CONTAINER AND EVALUATION  ##########################
 #--------------------------------------------------------------------------------------
-# This class is used to store data of experiment as .pickle file. Furthermore it contains all evaluation functions
+# This class is used to store data of experiment as .pickle file.
+# Furthermore, it contains all evaluation functions
 @dataclass
 class Experiment():
     name: str
@@ -1090,8 +1195,8 @@ class Experiment():
     model_name: str
     model_summary: str
 
-    one_shot_forecast: pd.DataFrame
-    recursive_forecast: pd.DataFrame
+    one_shot_forecast: Union[pd.DataFrame, None]
+    recursive_forecast: Union[pd.DataFrame, None]
 
     one_shot_forecast_MSE: float  = -1.0
     one_shot_forecast_MAE: float  = -1.0
@@ -1100,29 +1205,31 @@ class Experiment():
 
     def __post_init__(self):
         # One shot forecasting:
-        wtmp_true = [col for col in self.one_shot_forecast.columns if col.startswith("WTMP")][0]
+        if self.one_shot_forecast is not None:
+            wtmp_true = [col for col in self.one_shot_forecast.columns if col.startswith("WTMP")][0]
 
-        self.one_shot_forecast_MAE = mean_absolute_error(
-            self.one_shot_forecast[wtmp_true],
-            self.one_shot_forecast[f"{wtmp_true}_pred"]
-        )
+            self.one_shot_forecast_MAE = mean_absolute_error(
+                self.one_shot_forecast[wtmp_true],
+                self.one_shot_forecast[f"{wtmp_true}_pred"]
+            )
 
-        self.one_shot_forecast_MSE = mean_squared_error(
-            self.one_shot_forecast[wtmp_true],
-            self.one_shot_forecast[f"{wtmp_true}_pred"]
-        )
+            self.one_shot_forecast_MSE = mean_squared_error(
+                self.one_shot_forecast[wtmp_true],
+                self.one_shot_forecast[f"{wtmp_true}_pred"]
+            )
         # recurent forecasting:
-        wtmp_true = [col for col in self.recursive_forecast.columns if col.startswith("WTMP")][0]
+        if self.recursive_forecast is not None:
+            wtmp_true = [col for col in self.recursive_forecast.columns if col.startswith("WTMP")][0]
 
-        self.recursive_forecast_MAE = mean_absolute_error(
-            self.recursive_forecast[wtmp_true],
-            self.recursive_forecast[f"{wtmp_true}_pred"]
-        )
+            self.recursive_forecast_MAE = mean_absolute_error(
+                self.recursive_forecast[wtmp_true],
+                self.recursive_forecast[f"{wtmp_true}_pred"]
+            )
 
-        self.recursive_forecast_MSE = mean_squared_error(
-            self.recursive_forecast[wtmp_true],
-            self.recursive_forecast[f"{wtmp_true}_pred"]
-        )
+            self.recursive_forecast_MSE = mean_squared_error(
+                self.recursive_forecast[wtmp_true],
+                self.recursive_forecast[f"{wtmp_true}_pred"]
+            )
 
     def get_raw_data(self):
         data = get_data_A(
@@ -1270,8 +1377,7 @@ class Models():
                 mse_f2 = K.mean(K.square(y_true_f2 - y_pred_f2), axis=-1)
 
                 # Calculate the weighted loss
-                #TODO: WHY IS ALPHA HARDCODED?
-                weighted_loss = 0.5 * mse_f1 + (1 - 0.5) * mse_f2
+                weighted_loss = alpha * mse_f1 + (1 - alpha) * mse_f2
 
                 return weighted_loss
 
@@ -1304,8 +1410,7 @@ class Models():
                 mse_f2 = K.mean(K.square(y_true_f2 - y_pred_f2), axis=-1)
 
                 # Calculate the weighted loss
-                # TODO: WHY IS ALPHA HARDCODED?
-                weighted_loss = 0.5 * mse_f1 + (1 - 0.5) * mse_f2
+                weighted_loss = alpha * mse_f1 + (1 - alpha) * mse_f2
 
                 return weighted_loss
 
