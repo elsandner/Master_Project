@@ -471,20 +471,23 @@ class NDBC_lib:
     # Features are all features from all stations. (station id is stored in column name).
     # One instance should represent the state of an area (given by station numbers) at a certain timestamp.
     # This can be used to forecast future states of the same region.
-    @staticmethod
-    def build_dataset(station_numbers, year):
-        dataframes = list()
 
-        for station_number in station_numbers:
-            data = NDBC_lib.get_data_file(station_number, year)  # load file
+    # UNUSED AND UNNEEDED FILE!
 
-            if data is not None:
-                current_df = NDBC_lib.df_modification(data)[1]  # [1] ... df and not the whole tuple
-                current_df = current_df.loc[~current_df.index.duplicated(keep='first')]
-                dataframes.append(current_df)
-
-        merged_data = pd.concat(dataframes, axis=1, join="outer")  # outer join also includes NaN, inner join removes them
-        return merged_data
+    # @staticmethod
+    # def build_dataset(station_numbers, year):
+    #     dataframes = list()
+    #
+    #     for station_number in station_numbers:
+    #         data = NDBC_lib.get_data_file(station_number, year)  # load file
+    #
+    #         if data is not None:
+    #             current_df = NDBC_lib.df_modification(data)[1]  # [1] ... df and not the whole tuple
+    #             current_df = current_df.loc[~current_df.index.duplicated(keep='first')]
+    #             dataframes.append(current_df)
+    #
+    #     merged_data = pd.concat(dataframes, axis=1, join="outer")  # outer join also includes NaN, inner join removes them
+    #     return merged_data
 
 
     #Function to get the buoy data and return a well prepared dataset
@@ -636,11 +639,11 @@ class NDBC_lib:
 
 
     # Drop all columns and rows if they only exist of NaN values!
-    @staticmethod
-    def drop_NaN_rows_and_cols(df):
-        clean_df = df.dropna(axis=1, how='all')  # drop cols if all values are NaN
-        clean_df = clean_df.dropna(axis=0, how="all")  # drop rows if all values are NaN
-        return clean_df
+    # @staticmethod
+    # def drop_NaN_rows_and_cols(df):
+    #     clean_df = df.dropna(axis=1, how='all')  # drop cols if all values are NaN
+    #     clean_df = clean_df.dropna(axis=0, how="all")  # drop rows if all values are NaN
+    #     return clean_df
 
     @staticmethod
     def feature_selection_nan(df: pd.DataFrame , nan_threshold: float):
@@ -1066,7 +1069,7 @@ class DataProcessor:
     # Frame a time series as a supervised learning dataset.
     # Arguments:
     # data: Sequence of observations as a pd.Dataframe
-    # n_in: Number of lag observations as input (X).
+    # n_in: Number of observations as input (X).
     # n_out: Number of observations as output (y).
     # dropnan: Boolean whether or not to drop rows with NaN values.
     # Returns:
@@ -1184,7 +1187,6 @@ class Experiment():
     features: list
     era5: bool
     stationary_shift: int
-    lag: int
     n_test_hours: int
 
     #Preprocessing:
@@ -1249,7 +1251,7 @@ class Experiment():
         print(f"Years: {self.years}")
         print(f"NaN_Threshold: {self.nan_threshold}")
         print(f"Features: {self.features}")
-        print(f"ERA5: {self.era5}, Stationary Shift: {self.stationary_shift}, lag: {self.lag}, Test-Hours:{self.n_test_hours}")
+        print(f"ERA5: {self.era5}, Stationary Shift: {self.stationary_shift}, Test-Hours:{self.n_test_hours}")
         print(f"\n---------------------------------------")
         # print(f"Preprocessing: Stationary: {self.stationary}")
         print(f"Normalized: {True if self.scaler is not None else False}")
