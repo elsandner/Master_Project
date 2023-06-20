@@ -16,9 +16,11 @@ import re
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 
 from keras import Sequential
-from keras.layers import LSTM, Dense, Dropout
+from keras.layers import LSTM, Dense, Dropout, GRU, Conv1D, MaxPooling1D, Flatten
 import tensorflow as tf
 from keras import backend as K
+
+from tcn import TCN
 
 #--------------------------------------------------------------------------------------
 ################## GENERAL STUFF #########################################################
@@ -978,6 +980,7 @@ def get_NDBC_and_ERA5(station_id, year, features=None, add_ERA5=True):
     data_NDBC = data_NDBC[[f"{feature}_{station_id}" for feature in features]]
 
     if not add_ERA5:
+        data_NDBC.columns = data_NDBC.columns.str.replace(f'_{station_id}', '')
         return data_NDBC
 
     # Get ERA5
@@ -1004,6 +1007,7 @@ def get_data_B(files, features=None, n_in=1, n_out=1, nan_threshold=1, add_ERA5=
         data_list.append(data)
 
     dataset = pd.concat(data_list, axis=0)
+
 
     # feature selection by NaN rate
     nan_percentages = dataset.isna().sum() / len(dataset)
@@ -1170,6 +1174,28 @@ class DataProcessor:
 
         return inverted
 
+    # Those two functions take 360° overflow into account.
+    # If true value is 1° and predicted value is 359°, the error is 2° instead of 358°!
+    @staticmethod
+    def mean_absolute_error_WDIR(true_values, predictions):
+        # absolute_errors = abs(true_values - predictions)
+        delta_a = (360 - true_values + predictions) % 360
+        delta_b = (360 - predictions + true_values) % 360
+        absolute_errors = pd.Series([min(val1, val2) for val1, val2 in zip(delta_a, delta_b)])
+        mae = absolute_errors.mean()
+        return mae
+
+    @staticmethod
+    def mean_square_error_WDIR(true_values, predictions):
+        absolute_errors = abs(true_values - predictions)
+        delta_a = (360 - true_values + predictions) % 360
+        delta_b = (360 - predictions + true_values) % 360
+        absolute_errors = pd.Series([min(val1, val2) for val1, val2 in zip(delta_a, delta_b)])
+        squared_error = absolute_errors * absolute_errors
+        mse = squared_error.mean()
+        return mse
+
+
 
 #--------------------------------------------------------------------------------------
 ################## EXPERIMENT-DATA-CONTAINER AND EVALUATION  ##########################
@@ -1259,6 +1285,27 @@ class Experiment():
         print(f"Internal Model name: {self.model_name}")
         print(self.model_summary)
 
+    def get_settings_string(self):
+        settings_string = ""
+        settings_string += f"Experiment: {self.name}\n"
+        settings_string += f"{self.description}\n"
+        settings_string += "---------------------------------------\n"
+
+        stations_string = ', '.join(str(num) + '\n' if (i + 1) % 5 == 0 else str(num) for i, num in enumerate(self.stations))
+        settings_string += f"Stations: {stations_string}\n"
+
+        settings_string += f"Years: {self.years}\n"
+        settings_string += f"NaN_Threshold: {self.nan_threshold}\n"
+        settings_string += f"Features: {self.features}\n"
+        settings_string += f"ERA5: {self.era5}, Stationary Shift: {self.stationary_shift}, Test-Hours:{self.n_test_hours}\n"
+        settings_string += "\n---------------------------------------\n"
+        settings_string += f"Normalized: {True if self.scaler is not None else False}\n"
+        settings_string += "\n---------------------------------------\n"
+        settings_string += f"Internal Model name: {self.model_name}\n"
+        settings_string += self.model_summary
+
+        return settings_string
+
     def print_metrics(self):
         print("One-Shot-Forecasting:")
         print(f"MAE: {self.one_shot_forecast_MAE} \tMSE: {self.one_shot_forecast_MSE}")
@@ -1267,86 +1314,76 @@ class Experiment():
 
     # PLOT CHARTS
     # __ is the prefix for private functions!
-    def __print_chart_helper(self, df):
-        pred_cols = df.columns[df.columns.str.contains('_pred')]
+    # def __print_chart_helper(self, df):
+    #     pred_cols = df.columns[df.columns.str.contains('_pred')]
+    #
+    #     # Extract the feature names from the column names using regular expression
+    #     features = [re.sub('_pred$', '', col) for col in pred_cols]
+    #
+    #     # Plot the ground truth and prediction using the selected columns
+    #     fig, ax = plt.subplots()
+    #     df.plot(y=[f'{feature}_pred' for feature in features] + [f'{feature}' for feature in features], ax=ax)
+    #
+    #     # Set the title and legend
+    #     plt.title('Ground Truth vs Prediction')
+    #     plt.legend([f'{feature}_pred' for feature in features] + [f'{feature}' for feature in features])
+    #     plt.show()
 
-        # Extract the feature names from the column names using regular expression
-        features = [re.sub('_pred$', '', col) for col in pred_cols]
+    # def print_one_shot_forecast(self):
+    #     self.__print_chart_helper(self.one_shot_forecast)
 
-        # Plot the ground truth and prediction using the selected columns
-        fig, ax = plt.subplots()
-        df.plot(y=[f'{feature}_pred' for feature in features] + [f'{feature}' for feature in features], ax=ax)
+    # def print_recursive_forecast(self):
+    #     self.__print_chart_helper(self.recursive_forecast)
 
-        # Set the title and legend
-        plt.title('Ground Truth vs Prediction')
-        plt.legend([f'{feature}_pred' for feature in features] + [f'{feature}' for feature in features])
-        plt.show()
+    # def print_one_shot_WTMP(self):
+    #     wtmp_true = [col for col in self.one_shot_forecast.columns if col.startswith("WTMP")][0]
+    #
+    #     # Plot the ground truth and prediction using the selected columns
+    #     fig, ax = plt.subplots()
+    #     self.one_shot_forecast.plot(y=[wtmp_true, f"{wtmp_true}_pred"], ax=ax)
+    #
+    #     # Set the title and legend
+    #     plt.title('Ground Truth vs Prediction')
+    #     plt.legend([wtmp_true, f"{wtmp_true}_pred"])
+    #     plt.show()
 
-    def print_one_shot_forecast(self):
-        self.__print_chart_helper(self.one_shot_forecast)
-
-    def print_recursive_forecast(self):
-        self.__print_chart_helper(self.recursive_forecast)
-
-    def print_one_shot_WTMP(self):
-        wtmp_true = [col for col in self.one_shot_forecast.columns if col.startswith("WTMP")][0]
-
-        # Plot the ground truth and prediction using the selected columns
-        fig, ax = plt.subplots()
-        self.one_shot_forecast.plot(y=[wtmp_true, f"{wtmp_true}_pred"], ax=ax)
-
-        # Set the title and legend
-        plt.title('Ground Truth vs Prediction')
-        plt.legend([wtmp_true, f"{wtmp_true}_pred"])
-        plt.show()
-
-    def print_recursive_WTMP(self):
-        wtmp_true = [col for col in self.one_shot_forecast.columns if col.startswith("WTMP")][0]
-
-        # Plot the ground truth and prediction using the selected columns
-        fig, ax = plt.subplots()
-        self.recursive_forecast.plot(y=[wtmp_true, f"{wtmp_true}_pred"], ax=ax)
-
-        # Set the title and legend
-        plt.title('Ground Truth vs Prediction')
-        plt.legend([wtmp_true, f"{wtmp_true}_pred"])
-        plt.show()
+    # def print_recursive_WTMP(self):
+    #     wtmp_true = [col for col in self.one_shot_forecast.columns if col.startswith("WTMP")][0]
+    #
+    #     # Plot the ground truth and prediction using the selected columns
+    #     fig, ax = plt.subplots()
+    #     self.recursive_forecast.plot(y=[wtmp_true, f"{wtmp_true}_pred"], ax=ax)
+    #
+    #     # Set the title and legend
+    #     plt.title('Ground Truth vs Prediction')
+    #     plt.legend([wtmp_true, f"{wtmp_true}_pred"])
+    #     plt.show()
 
 #--------------------------------------------------------------------------------------
 ############################# MACHINE LEARNING MODELS  ################################
 #--------------------------------------------------------------------------------------
 class Models():
-    # LSTM:
-    def lstm_0(train_X, train_y):
 
-        # design network
-        model = Sequential()
-        model.add(LSTM(50, input_shape=(train_X.shape[1], train_X.shape[2])))
-        model.add(Dense(train_X.shape[2]))  # Predict all features!
-        model.compile(loss='mean_squared_error', optimizer='adam')
+    def LSTM(train_X, train_y, alpha):
 
-        # fit network
-        model.fit(train_X, train_y, epochs=50, batch_size=72, verbose=0, shuffle=False)
+        def custom_loss():
+            def loss(y_true, y_pred):
 
-        return model
+                # Split y_true and y_pred into two features
+                y_true_NDBC, y_true_ERA5 = tf.split(y_true, num_or_size_splits=2, axis=1)
+                y_pred_NDBC, y_pred_ERA5 = tf.split(y_pred, num_or_size_splits=2, axis=1)
 
-    def lstm_1(train_X, train_y):
-        # design network
-        model = Sequential()
-        model.add(LSTM(128, input_shape=(train_X.shape[1], train_X.shape[2]), return_sequences=True))
-        model.add(Dropout(0.2))
-        model.add(LSTM(64, return_sequences=True))
-        model.add(Dropout(0.2))
-        model.add(LSTM(32))
-        model.add(Dense(train_X.shape[2]))
-        model.compile(loss='mean_squared_error', optimizer='adam')
+                # Calculate the mean squared error for each feature
+                mse_NDBC = K.mean(K.square(y_true_NDBC - y_pred_NDBC), axis=-1)
+                mse_ERA5 = K.mean(K.square(y_true_ERA5 - y_pred_ERA5), axis=-1)
 
-        # fit network
-        history = model.fit(train_X, train_y, epochs=100, batch_size=64, verbose=1, shuffle=False, validation_split=0.1)
+                # Calculate the weighted loss
+                weighted_loss = alpha * mse_NDBC + (1 - alpha) * mse_ERA5
 
-        return model
+                return weighted_loss
 
-    def lstm_2(train_X, train_y):
+            return loss
+
         # design network
         model = Sequential()
         model.add(LSTM(128, input_shape=(train_X.shape[1], train_X.shape[2]), return_sequences=True))
@@ -1357,62 +1394,32 @@ class Models():
         model.add(Dropout(0.2))
         model.add(LSTM(16))
         model.add(Dense(train_X.shape[2]))
-        model.compile(loss='mean_squared_error', optimizer='adam')
-
-        # fit network
-        history = model.fit(train_X, train_y, epochs=100, batch_size=64, verbose=1, shuffle=False, validation_split=0.1)
-
-        return model
-
-    # ------------------------------------------------------------------
-    # PINN:
-    def pinn_0(train_X, train_y, alpha):
-
-        def custom_loss():
-            def loss(y_true, y_pred):
-                # Split y_true and y_pred into two features
-                y_true_f1, y_true_f2 = tf.split(y_true, num_or_size_splits=2, axis=1)
-                y_pred_f1, y_pred_f2 = tf.split(y_pred, num_or_size_splits=2, axis=1)
-
-                # Calculate the mean squared error for each feature
-                mse_f1 = K.mean(K.square(y_true_f1 - y_pred_f1), axis=-1)
-                mse_f2 = K.mean(K.square(y_true_f2 - y_pred_f2), axis=-1)
-
-                # Calculate the weighted loss
-                weighted_loss = alpha * mse_f1 + (1 - alpha) * mse_f2
-
-                return weighted_loss
-
-            return loss
-
-        # design network
-        model = Sequential()
-        model.add(LSTM(50, input_shape=(train_X.shape[1], train_X.shape[2])))
-        model.add(Dense(train_X.shape[2]))  # Predict all features!
 
         model.compile(optimizer='adam',
                       loss=custom_loss(),
                       )
 
         # fit network
-        model.fit(train_X, train_y, epochs=50, batch_size=72, verbose=0, shuffle=False)
+        history = model.fit(train_X, train_y, epochs=100, batch_size=64, verbose=1, shuffle=False,
+                            validation_split=0.1)
 
         return model
 
-    def pinn_1(train_X, train_y, alpha):
+    def GRU(train_X, train_y, alpha):
 
         def custom_loss():
             def loss(y_true, y_pred):
+
                 # Split y_true and y_pred into two features
-                y_true_f1, y_true_f2 = tf.split(y_true, num_or_size_splits=2, axis=1)
-                y_pred_f1, y_pred_f2 = tf.split(y_pred, num_or_size_splits=2, axis=1)
+                y_true_NDBC, y_true_ERA5 = tf.split(y_true, num_or_size_splits=2, axis=1)
+                y_pred_NDBC, y_pred_ERA5 = tf.split(y_pred, num_or_size_splits=2, axis=1)
 
                 # Calculate the mean squared error for each feature
-                mse_f1 = K.mean(K.square(y_true_f1 - y_pred_f1), axis=-1)
-                mse_f2 = K.mean(K.square(y_true_f2 - y_pred_f2), axis=-1)
+                mse_NDBC = K.mean(K.square(y_true_NDBC - y_pred_NDBC), axis=-1)
+                mse_ERA5 = K.mean(K.square(y_true_ERA5 - y_pred_ERA5), axis=-1)
 
                 # Calculate the weighted loss
-                weighted_loss = alpha * mse_f1 + (1 - alpha) * mse_f2
+                weighted_loss = alpha * mse_NDBC + (1 - alpha) * mse_ERA5
 
                 return weighted_loss
 
@@ -1420,11 +1427,13 @@ class Models():
 
         # design network
         model = Sequential()
-        model.add(LSTM(128, input_shape=(train_X.shape[1], train_X.shape[2]), return_sequences=True))
+        model.add(GRU(128, input_shape=(train_X.shape[1], train_X.shape[2]), return_sequences=True))
         model.add(Dropout(0.2))
-        model.add(LSTM(64, return_sequences=True))
+        model.add(GRU(64, return_sequences=True))
         model.add(Dropout(0.2))
-        model.add(LSTM(32))
+        model.add(GRU(32, return_sequences=True))
+        model.add(Dropout(0.2))
+        model.add(GRU(16))
         model.add(Dense(train_X.shape[2]))
 
         model.compile(optimizer='adam',
@@ -1432,32 +1441,101 @@ class Models():
                       )
 
         # fit network
-        model.fit(train_X, train_y, epochs=50, batch_size=72, verbose=0, shuffle=False)
+        history = model.fit(train_X, train_y, epochs=100, batch_size=64, verbose=1, shuffle=False,
+                            validation_split=0.1)
 
         return model
 
-    # ------------------------------------------------------------------
+    def CNN(train_X, train_y, alpha):
+
+        def custom_loss():
+            def loss(y_true, y_pred):
+
+                # Split y_true and y_pred into two features
+                y_true_NDBC, y_true_ERA5 = tf.split(y_true, num_or_size_splits=2, axis=1)
+                y_pred_NDBC, y_pred_ERA5 = tf.split(y_pred, num_or_size_splits=2, axis=1)
+
+                # Calculate the mean squared error for each feature
+                mse_NDBC = K.mean(K.square(y_true_NDBC - y_pred_NDBC), axis=-1)
+                mse_ERA5 = K.mean(K.square(y_true_ERA5 - y_pred_ERA5), axis=-1)
+
+                # Calculate the weighted loss
+                weighted_loss = alpha * mse_NDBC + (1 - alpha) * mse_ERA5
+
+                return weighted_loss
+
+            return loss
+
+        # design network
+        model = Sequential()
+        model.add(Conv1D(filters=64, kernel_size=3, activation='relu', input_shape=(train_X.shape[1], train_X.shape[2])))
+        model.add(Conv1D(filters=64, kernel_size=3, activation='relu'))
+        model.add(Dropout(0.5))
+        model.add(MaxPooling1D(pool_size=2))
+        model.add(Flatten())
+        model.add(Dense(100, activation='relu'))
+        model.add(Dense(train_X.shape[2]))
+
+        model.compile(optimizer='adam',
+                      loss=custom_loss(),
+                      )
+
+        # fit network
+        history = model.fit(train_X, train_y, epochs=100, batch_size=64, verbose=1, shuffle=False,
+                            validation_split=0.1)
+
+        return model
+
+    def TCN(train_X, train_y, alpha):
+        def custom_loss():
+            def loss(y_true, y_pred):
+                # Split y_true and y_pred into two features
+                y_true_NDBC, y_true_ERA5 = tf.split(y_true, num_or_size_splits=2, axis=1)
+                y_pred_NDBC, y_pred_ERA5 = tf.split(y_pred, num_or_size_splits=2, axis=1)
+
+                # Calculate the mean squared error for each feature
+                mse_NDBC = K.mean(K.square(y_true_NDBC - y_pred_NDBC), axis=-1)
+                mse_ERA5 = K.mean(K.square(y_true_ERA5 - y_pred_ERA5), axis=-1)
+
+                # Calculate the weighted loss
+                weighted_loss = alpha * mse_NDBC + (1 - alpha) * mse_ERA5
+
+                return weighted_loss
+
+            return loss
+
+        # Design network
+        model = Sequential()
+        model.add(TCN(nb_filters=64, kernel_size=3, dilations=[1, 2, 4, 8], padding='causal', activation='relu',
+                      return_sequences=True, input_shape=(train_X.shape[1], train_X.shape[2])))
+        model.add(TCN(nb_filters=64, kernel_size=3, dilations=[1, 2, 4, 8], padding='causal', activation='relu',
+                      return_sequences=True))
+        model.add(TCN(nb_filters=64, kernel_size=3, dilations=[1, 2, 4, 8], padding='causal', activation='relu',
+                      return_sequences=False))
+        model.add(Dense(train_X.shape[2]))
+
+        model.compile(optimizer='adam',
+                      loss=custom_loss())
+
+        # Fit network
+        history = model.fit(train_X, train_y, epochs=100, batch_size=64, verbose=1, shuffle=False,
+                            validation_split=0.1)
+
+        return model
+
+        # ------------------------------------------------------------------
 
     model_dictionary = {
-        # LSTM:
-        "lstm_0": lstm_0,
-        "lstm_1": lstm_1,
-        "lstm_2": lstm_2,
-
-        # PINN:
-        "pinn_0": pinn_0,
-        "pinn_1": pinn_1
-        # ....
+        "LSTM": LSTM,
+        "GRU": GRU,
+        "CNN": CNN,
+        "TCN": TCN,
     }
 
     @staticmethod
     def get_model(model_name, train_X, train_y, alpha=None):
+        model_function = Models.model_dictionary[model_name]
+        return model_function(train_X, train_y, alpha)
 
-        if model_name.startswith("pinn"):
-            model_function = Models.model_dictionary[model_name]
-            return model_function(train_X, train_y, alpha)
-        else:
-            model_function = Models.model_dictionary[model_name]
-            return model_function(train_X, train_y)
 
 
