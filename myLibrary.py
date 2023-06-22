@@ -1116,7 +1116,7 @@ class DataProcessor:
     #   train_X, test_X: numpy.array
     #   train_y, test_y: pd.Dataframe
     @staticmethod
-    def train_test_split(data: pd.DataFrame, n_test_hours: int):
+    def train_test_split_old(data: pd.DataFrame, n_test_hours: int):
         # split into train and test sets
         train = data.head(-n_test_hours).values
         test = data.tail(n_test_hours).values
@@ -1132,6 +1132,76 @@ class DataProcessor:
         # reshape input to be 3D [samples, timesteps, features]
         train_X = train_X.reshape((train_X.shape[0], 1, train_X.shape[1]))
         test_X = test_X.reshape((test_X.shape[0], 1, test_X.shape[1]))
+
+        return train_X, train_y, test_X, test_y
+
+    # Does the same but returns 3d numpy arrays and handles different time_stamps within one instance correctly.
+    # Will be tested now!
+    @staticmethod
+    def train_test_split(data: pd.DataFrame, n_test_hours: int):
+
+        # Extract time options
+        input_cols, output_cols = [], []
+        for column_header in data.columns:
+            # Split the column header by '(' and ')' to extract the time option
+            time_option = column_header.split('(')[-1].split(')')[0]
+            time_option = f"({time_option})"
+            if '-' in time_option and time_option not in input_cols:
+                input_cols.append(time_option)
+            elif '-' not in time_option and time_option not in output_cols:
+                output_cols.append(time_option)
+
+        # split into train and test sets
+        train = data.head(-n_test_hours)
+        test = data.tail(n_test_hours)
+
+        # Create list of dataframes - one dataframe per time_stamp
+        df_train_X, df_test_X, df_train_y, df_test_y = [], [], [], []
+        for time_option in input_cols:
+            df_train_X.append(train.filter(like=time_option, axis=1))
+            df_test_X.append(test.filter(like=time_option, axis=1))
+
+        for time_option in output_cols:
+            df_train_y.append(train.filter(like=time_option, axis=1))
+            df_test_y.append(test.filter(like=time_option, axis=1))
+
+        # Get the dimensions
+        train_X_dims = (df_train_X[0].shape[0],  # Number of rows
+                        len(df_train_X),  # Number of dataframes = number of timestamps
+                        df_train_X[0].shape[1]  # number of cols = number of features
+                        )
+        test_X_dims = (df_test_X[0].shape[0],  # Number of rows
+                       len(df_test_X),  # Number of dataframes = number of timestamps
+                       df_test_X[0].shape[1]  # number of cols = number of features
+                       )
+        train_y_dims = (df_train_y[0].shape[0],  # Number of rows
+                        len(df_train_y),  # Number of dataframes = number of timestamps
+                        df_train_y[0].shape[1]  # number of cols = number of features
+                        )
+        test_y_dims = (df_test_y[0].shape[0],  # Number of rows
+                       len(df_test_y),  # Number of dataframes = number of timestamps
+                       df_test_y[0].shape[1]  # number of cols = number of features
+                       )
+
+        # Create a three-dimensional array filled with NaN
+        train_X = np.empty(train_X_dims)
+        test_X = np.empty(test_X_dims)
+        train_y = np.empty(train_y_dims)
+        test_y = np.empty(test_y_dims)
+        train_X.fill(np.nan)
+        test_X.fill(np.nan)
+        train_y.fill(np.nan)
+        test_y.fill(np.nan)
+
+        # Fill the array with data from dataframes
+        for i, df in enumerate(df_train_X):
+            train_X[:, i, :] = df.values
+        for i, df in enumerate(df_test_X):
+            test_X[:, i, :] = df.values
+        for i, df in enumerate(df_train_y):
+            train_y[:, i, :] = df.values
+        for i, df in enumerate(df_test_y):
+            test_y[:, i, :] = df.values
 
         return train_X, train_y, test_X, test_y
 
@@ -1468,10 +1538,16 @@ class Models():
 
         # design network
         model = Sequential()
-        model.add(Conv1D(filters=64, kernel_size=3, activation='relu', input_shape=(train_X.shape[1], train_X.shape[2])))
+
+        model.add(Conv1D(filters=128,
+                         kernel_size=3,
+                         activation='relu',
+                         input_shape=(train_X.shape[1], train_X.shape[2])
+                ))
+
         model.add(Conv1D(filters=64, kernel_size=3, activation='relu'))
+        #model.add(MaxPooling1D(pool_size=2))
         model.add(Dropout(0.5))
-        model.add(MaxPooling1D(pool_size=2))
         model.add(Flatten())
         model.add(Dense(100, activation='relu'))
         model.add(Dense(train_X.shape[2]))
@@ -1479,6 +1555,8 @@ class Models():
         model.compile(optimizer='adam',
                       loss=custom_loss(),
                       )
+
+        print(model.summary())
 
         # fit network
         history = model.fit(train_X, train_y, epochs=100, batch_size=64, verbose=1, shuffle=False,
