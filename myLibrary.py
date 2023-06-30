@@ -1138,6 +1138,7 @@ class DataProcessor:
     # Does the same but returns 3d numpy arrays and handles different time_stamps within one instance correctly.
     # Will be tested now!
     @staticmethod
+    # NEW VERSION OF THIS METHOD !!
     def train_test_split(data: pd.DataFrame, n_test_hours: int):
 
         # Extract time options
@@ -1148,22 +1149,18 @@ class DataProcessor:
             time_option = f"({time_option})"
             if '-' in time_option and time_option not in input_cols:
                 input_cols.append(time_option)
-            elif '-' not in time_option and time_option not in output_cols:
-                output_cols.append(time_option)
 
         # split into train and test sets
         train = data.head(-n_test_hours)
         test = data.tail(n_test_hours)
 
+        # Input X:
         # Create list of dataframes - one dataframe per time_stamp
-        df_train_X, df_test_X, df_train_y, df_test_y = [], [], [], []
+        df_train_X = []
+        df_test_X = []
         for time_option in input_cols:
             df_train_X.append(train.filter(like=time_option, axis=1))
             df_test_X.append(test.filter(like=time_option, axis=1))
-
-        for time_option in output_cols:
-            df_train_y.append(train.filter(like=time_option, axis=1))
-            df_test_y.append(test.filter(like=time_option, axis=1))
 
         # Get the dimensions
         train_X_dims = (df_train_X[0].shape[0],  # Number of rows
@@ -1174,36 +1171,30 @@ class DataProcessor:
                        len(df_test_X),  # Number of dataframes = number of timestamps
                        df_test_X[0].shape[1]  # number of cols = number of features
                        )
-        train_y_dims = (df_train_y[0].shape[0],  # Number of rows
-                        len(df_train_y),  # Number of dataframes = number of timestamps
-                        df_train_y[0].shape[1]  # number of cols = number of features
-                        )
-        test_y_dims = (df_test_y[0].shape[0],  # Number of rows
-                       len(df_test_y),  # Number of dataframes = number of timestamps
-                       df_test_y[0].shape[1]  # number of cols = number of features
-                       )
 
         # Create a three-dimensional array filled with NaN
         train_X = np.empty(train_X_dims)
         test_X = np.empty(test_X_dims)
-        train_y = np.empty(train_y_dims)
-        test_y = np.empty(test_y_dims)
         train_X.fill(np.nan)
         test_X.fill(np.nan)
-        train_y.fill(np.nan)
-        test_y.fill(np.nan)
 
         # Fill the array with data from dataframes
         for i, df in enumerate(df_train_X):
             train_X[:, i, :] = df.values
         for i, df in enumerate(df_test_X):
             test_X[:, i, :] = df.values
-        for i, df in enumerate(df_train_y):
-            train_y[:, i, :] = df.values
-        for i, df in enumerate(df_test_y):
-            test_y[:, i, :] = df.values
+
+        # Output y:
+        output_cols = [i for i in range(data.values.shape[1]) if
+                       ('(t)' in data.columns[i]) or ('t+' in data.columns[i])]
+        # split into input and outputs
+        train_y = train.values[:, output_cols]
+        test_y = test.values[:, output_cols]
 
         return train_X, train_y, test_X, test_y
+
+
+
 
     # Scales the complete data on a scale between -1 and 1
     # Only considers training data to train scalar
@@ -1292,6 +1283,7 @@ class Experiment():
     #Model:
     model_name: str
     model_summary: str
+    training_time: float
 
     one_shot_forecast: Union[pd.DataFrame, None]
     recursive_forecast: Union[pd.DataFrame, None]
@@ -1382,52 +1374,7 @@ class Experiment():
         print("\nRecurrent-Forecasting:")
         print(f"MAE: {self.recursive_forecast_MAE} \tMSE: {self.recursive_forecast_MSE}")
 
-    # PLOT CHARTS
-    # __ is the prefix for private functions!
-    # def __print_chart_helper(self, df):
-    #     pred_cols = df.columns[df.columns.str.contains('_pred')]
-    #
-    #     # Extract the feature names from the column names using regular expression
-    #     features = [re.sub('_pred$', '', col) for col in pred_cols]
-    #
-    #     # Plot the ground truth and prediction using the selected columns
-    #     fig, ax = plt.subplots()
-    #     df.plot(y=[f'{feature}_pred' for feature in features] + [f'{feature}' for feature in features], ax=ax)
-    #
-    #     # Set the title and legend
-    #     plt.title('Ground Truth vs Prediction')
-    #     plt.legend([f'{feature}_pred' for feature in features] + [f'{feature}' for feature in features])
-    #     plt.show()
 
-    # def print_one_shot_forecast(self):
-    #     self.__print_chart_helper(self.one_shot_forecast)
-
-    # def print_recursive_forecast(self):
-    #     self.__print_chart_helper(self.recursive_forecast)
-
-    # def print_one_shot_WTMP(self):
-    #     wtmp_true = [col for col in self.one_shot_forecast.columns if col.startswith("WTMP")][0]
-    #
-    #     # Plot the ground truth and prediction using the selected columns
-    #     fig, ax = plt.subplots()
-    #     self.one_shot_forecast.plot(y=[wtmp_true, f"{wtmp_true}_pred"], ax=ax)
-    #
-    #     # Set the title and legend
-    #     plt.title('Ground Truth vs Prediction')
-    #     plt.legend([wtmp_true, f"{wtmp_true}_pred"])
-    #     plt.show()
-
-    # def print_recursive_WTMP(self):
-    #     wtmp_true = [col for col in self.one_shot_forecast.columns if col.startswith("WTMP")][0]
-    #
-    #     # Plot the ground truth and prediction using the selected columns
-    #     fig, ax = plt.subplots()
-    #     self.recursive_forecast.plot(y=[wtmp_true, f"{wtmp_true}_pred"], ax=ax)
-    #
-    #     # Set the title and legend
-    #     plt.title('Ground Truth vs Prediction')
-    #     plt.legend([wtmp_true, f"{wtmp_true}_pred"])
-    #     plt.show()
 
 #--------------------------------------------------------------------------------------
 ############################# MACHINE LEARNING MODELS  ################################
@@ -1533,24 +1480,17 @@ class Models():
                 weighted_loss = alpha * mse_NDBC + (1 - alpha) * mse_ERA5
 
                 return weighted_loss
-
             return loss
 
-        # design network
+        #design network
         model = Sequential()
-
-        model.add(Conv1D(filters=128,
-                         kernel_size=3,
-                         activation='relu',
-                         input_shape=(train_X.shape[1], train_X.shape[2])
-                ))
-
-        model.add(Conv1D(filters=64, kernel_size=3, activation='relu'))
-        #model.add(MaxPooling1D(pool_size=2))
-        model.add(Dropout(0.5))
+        model.add(Conv1D(filters=128, kernel_size=2, activation='relu', input_shape=(train_X.shape[1], train_X.shape[2])))
+        model.add(MaxPooling1D(pool_size=1))
+        model.add(Conv1D(filters=64, kernel_size=2, activation='relu', input_shape=(2, 128)))
+        model.add(MaxPooling1D(pool_size=1))
         model.add(Flatten())
-        model.add(Dense(100, activation='relu'))
-        model.add(Dense(train_X.shape[2]))
+        model.add(Dense(50, activation='relu'))
+        model.add(Dense(train_y.shape[1]))
 
         model.compile(optimizer='adam',
                       loss=custom_loss(),
@@ -1611,7 +1551,7 @@ class Models():
     }
 
     @staticmethod
-    def get_model(model_name, train_X, train_y, alpha=None):
+    def get_model(model_name, train_X, train_y, alpha):
         model_function = Models.model_dictionary[model_name]
         return model_function(train_X, train_y, alpha)
 
