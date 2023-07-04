@@ -1288,38 +1288,39 @@ class Experiment():
     one_shot_forecast: Union[pd.DataFrame, None]
     recursive_forecast: Union[pd.DataFrame, None]
 
-    one_shot_forecast_MSE: float  = -1.0
-    one_shot_forecast_MAE: float  = -1.0
-    recursive_forecast_MAE: float = -1.0
-    recursive_forecast_MSE: float = -1.0
+    #THOSE VARIBALES SHOULD BE REMOVED!
+    # one_shot_forecast_MSE: float  = -1.0
+    # one_shot_forecast_MAE: float  = -1.0
+    # recursive_forecast_MAE: float = -1.0
+    # recursive_forecast_MSE: float = -1.0
 
-    def __post_init__(self):
-        # One shot forecasting:
-        if self.one_shot_forecast is not None:
-            wtmp_true = [col for col in self.one_shot_forecast.columns if col.startswith("WTMP")][0]
-
-            self.one_shot_forecast_MAE = mean_absolute_error(
-                self.one_shot_forecast[wtmp_true],
-                self.one_shot_forecast[f"{wtmp_true}_pred"]
-            )
-
-            self.one_shot_forecast_MSE = mean_squared_error(
-                self.one_shot_forecast[wtmp_true],
-                self.one_shot_forecast[f"{wtmp_true}_pred"]
-            )
-        # recurent forecasting:
-        if self.recursive_forecast is not None:
-            wtmp_true = [col for col in self.recursive_forecast.columns if col.startswith("WTMP")][0]
-
-            self.recursive_forecast_MAE = mean_absolute_error(
-                self.recursive_forecast[wtmp_true],
-                self.recursive_forecast[f"{wtmp_true}_pred"]
-            )
-
-            self.recursive_forecast_MSE = mean_squared_error(
-                self.recursive_forecast[wtmp_true],
-                self.recursive_forecast[f"{wtmp_true}_pred"]
-            )
+    # def __post_init__(self):
+    #     # One shot forecasting:
+    #     if self.one_shot_forecast is not None:
+    #         wtmp_true = [col for col in self.one_shot_forecast.columns if col.startswith("WTMP")][0]
+    #             self.one_shot_forecast_MAE = mean_absolute_error(
+    #                 self.one_shot_forecast[wtmp_true],
+    #                 self.one_shot_forecast[f"{wtmp_true}_pred"]
+    #             )
+    #
+    #             self.one_shot_forecast_MSE = mean_squared_error(
+    #                 self.one_shot_forecast[wtmp_true],
+    #                 self.one_shot_forecast[f"{wtmp_true}_pred"]
+    #             )
+    #
+    #     # recurent forecasting:
+    #     if self.recursive_forecast is not None:
+    #         wtmp_true = [col for col in self.recursive_forecast.columns if col.startswith("WTMP")][0]
+    #
+    #         self.recursive_forecast_MAE = mean_absolute_error(
+    #             self.recursive_forecast[wtmp_true],
+    #             self.recursive_forecast[f"{wtmp_true}_pred"]
+    #         )
+    #
+    #         self.recursive_forecast_MSE = mean_squared_error(
+    #             self.recursive_forecast[wtmp_true],
+    #             self.recursive_forecast[f"{wtmp_true}_pred"]
+    #         )
 
     def get_raw_data(self):
         data = get_data_A(
