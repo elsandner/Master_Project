@@ -468,30 +468,6 @@ class NDBC_lib:
         return filename, df
 
 
-    # The function build_dataset(station_numbers, year) builds a dataset for one specific year considering the
-    # given station numbers. Each instance uses a timestamp (index) as identifier.
-    # Features are all features from all stations. (station id is stored in column name).
-    # One instance should represent the state of an area (given by station numbers) at a certain timestamp.
-    # This can be used to forecast future states of the same region.
-
-    # UNUSED AND UNNEEDED FILE!
-
-    # @staticmethod
-    # def build_dataset(station_numbers, year):
-    #     dataframes = list()
-    #
-    #     for station_number in station_numbers:
-    #         data = NDBC_lib.get_data_file(station_number, year)  # load file
-    #
-    #         if data is not None:
-    #             current_df = NDBC_lib.df_modification(data)[1]  # [1] ... df and not the whole tuple
-    #             current_df = current_df.loc[~current_df.index.duplicated(keep='first')]
-    #             dataframes.append(current_df)
-    #
-    #     merged_data = pd.concat(dataframes, axis=1, join="outer")  # outer join also includes NaN, inner join removes them
-    #     return merged_data
-
-
     #Function to get the buoy data and return a well prepared dataset
     #What happens:
     #   Download data
@@ -1061,8 +1037,6 @@ class DataProcessor:
         for col in range(data.shape[1]):
             data[0][col] = data[0][col] + first_row[col]
 
-
-
         #Loop columns and add stationary value (=dif) to previous value
         for row in range(n, data.shape[0]):   #loop rows
             for col in range(data.shape[1]):   #loop cols
@@ -1557,4 +1531,8 @@ class Models():
         return model_function(train_X, train_y, alpha)
 
 
+    def method1(a, b):
+        return a+b+1
 
+    def method2(a, b):
+        return a+b+2
