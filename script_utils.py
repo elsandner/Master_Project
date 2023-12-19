@@ -12,11 +12,11 @@ import math
 from typing import Union
 
 from dataclasses import dataclass
-import re
-from sklearn.metrics import mean_squared_error, mean_absolute_error
 
+from tensorflow import keras
 from keras import Sequential
-from keras.layers import LSTM, Dense, Dropout, GRU, Conv1D, MaxPooling1D, Flatten
+from keras import layers
+from keras.layers import LSTM, Dense, Dropout, GRU, Conv1D, MaxPooling1D, Flatten, BatchNormalization
 import tensorflow as tf
 from keras import backend as K
 
@@ -718,7 +718,7 @@ class ERA5_lib:
                     '18:00', '19:00', '20:00', '21:00', '22:00', '23:00',
                 ],
                 # 'area': station_point_coord,  # Area: NORTH, WEST, SOUTH, EAST
-                'area': coords,
+                'area': coords, #E.g. ??
                 'format': 'netcdf',
             },
             path
@@ -1355,7 +1355,13 @@ class Experiment():
 ############################# MACHINE LEARNING MODELS  ################################
 #--------------------------------------------------------------------------------------
 class Models():
+    # Set a random seed for reproducibility
+    np.random.seed(42)
+    tf.random.set_seed(42)
+    os.environ['PYTHONHASHSEED'] = '0'
 
+
+    #Models for Master Thesis:
     def LSTM(train_X, train_y, alpha):
 
         def custom_loss():
@@ -1499,12 +1505,9 @@ class Models():
 
         # Design network
         model = Sequential()
-        model.add(TCN(nb_filters=64, kernel_size=3, dilations=[1, 2, 4, 8], padding='causal', activation='relu',
-                      return_sequences=True, input_shape=(train_X.shape[1], train_X.shape[2])))
-        model.add(TCN(nb_filters=64, kernel_size=3, dilations=[1, 2, 4, 8], padding='causal', activation='relu',
-                      return_sequences=True))
-        model.add(TCN(nb_filters=64, kernel_size=3, dilations=[1, 2, 4, 8], padding='causal', activation='relu',
-                      return_sequences=False))
+        model.add(TCN(nb_filters=64, kernel_size=3, dilations=[1, 2, 4, 8], padding='causal', activation='relu', return_sequences=True, input_shape=(train_X.shape[1], train_X.shape[2])))
+        model.add(TCN(nb_filters=64, kernel_size=3, dilations=[1, 2, 4, 8], padding='causal', activation='relu', return_sequences=True))
+        model.add(TCN(nb_filters=64, kernel_size=3, dilations=[1, 2, 4, 8], padding='causal', activation='relu', return_sequences=False))
         model.add(Dense(train_X.shape[2]))
 
         model.compile(optimizer='adam',
@@ -1518,11 +1521,261 @@ class Models():
 
         # ------------------------------------------------------------------
 
+    #Models for publication:
+    #TODO: if other models from thesis should be considered in publication just copy them and replace the loss function with that one from LSTM_2
+    def LSTM_2(train_X, train_y, alpha):
+        # Changes:
+            # RMSE instead of MSE
+            # Replaced y_ture_ERA5 with y_true_NDBC
+
+        def custom_loss():
+            def loss(y_true, y_pred):
+
+                # Split y_true and y_pred into two features
+                y_true_NDBC, y_true_ERA5 = tf.split(y_true, num_or_size_splits=2, axis=1)
+                y_pred_NDBC, y_pred_ERA5 = tf.split(y_pred, num_or_size_splits=2, axis=1)
+
+                # Calculate the root mean squared error for each feature
+                mae_NDBC = K.mean(K.abs(y_true_NDBC - y_pred_NDBC), axis=-1)
+                mae_ERA5 = K.mean(K.abs(y_true_NDBC - y_pred_ERA5), axis=-1) #Replaced y_true_ERA5 with y_true_NDBC
+
+                # Calculate the weighted loss
+                weighted_loss = alpha * mae_NDBC + (1 - alpha) * mae_ERA5
+
+                return weighted_loss
+
+            return loss
+
+        # design network
+        model = Sequential()
+        model.add(LSTM(128, input_shape=(train_X.shape[1], train_X.shape[2]), return_sequences=True))
+        model.add(Dropout(0.2))
+        model.add(LSTM(64, return_sequences=True))
+        model.add(Dropout(0.2))
+        model.add(LSTM(32, return_sequences=True))
+        model.add(Dropout(0.2))
+        model.add(LSTM(16))
+        model.add(Dense(train_X.shape[2]))
+
+        model.compile(optimizer='adam',
+                      loss=custom_loss(),
+                      )
+
+        # fit network
+        history = model.fit(train_X, train_y, epochs=100, batch_size=64, verbose=1, shuffle=False,
+                            validation_split=0.1)
+
+        return model
+
+    def CNN_2(train_X, train_y, alpha):
+        # Changes:
+            # RMSE instead of MSE
+            # Replaced y_ture_ERA5 with y_true_NDBC
+
+        def custom_loss():
+            def loss(y_true, y_pred):
+
+                # Split y_true and y_pred into two features
+                y_true_NDBC, y_true_ERA5 = tf.split(y_true, num_or_size_splits=2, axis=1)
+                y_pred_NDBC, y_pred_ERA5 = tf.split(y_pred, num_or_size_splits=2, axis=1)
+
+                # Calculate the root mean squared error for each feature
+                mae_NDBC = K.mean(K.abs(y_true_NDBC - y_pred_NDBC), axis=-1)
+                mae_ERA5 = K.mean(K.abs(y_true_NDBC - y_pred_ERA5), axis=-1) #Replaced y_true_ERA5 with y_true_NDBC
+
+                # Calculate the weighted loss
+                weighted_loss = alpha * mae_NDBC + (1 - alpha) * mae_ERA5
+
+                return weighted_loss
+
+            return loss
+
+        #design network
+        model = Sequential()
+        model.add(Conv1D(filters=128, kernel_size=2, activation='relu', input_shape=(train_X.shape[1], train_X.shape[2])))
+        model.add(MaxPooling1D(pool_size=1))
+        model.add(Conv1D(filters=64, kernel_size=2, activation='relu', input_shape=(2, 128)))
+        model.add(MaxPooling1D(pool_size=1))
+        model.add(Flatten())
+        model.add(Dense(50, activation='relu'))
+        model.add(Dense(train_y.shape[1]))
+
+        model.compile(optimizer='adam',
+                      loss=custom_loss(),
+                      )
+
+        # fit network
+        history = model.fit(train_X, train_y, epochs=100, batch_size=64, verbose=1, shuffle=False,
+                            validation_split=0.1)
+
+        return model
+
+# ----------------------------------------------------------------------------------------
+
+
+    # Same Model as Austin is using
+    # Stopped experiment with MLM dataset from thesis after about 20h at epoch 38
+    def transformer_original(train_X, train_y, alpha):
+
+        def custom_loss():
+            def loss(y_true, y_pred):
+
+                # Split y_true and y_pred into two features
+                y_true_NDBC, y_true_ERA5 = tf.split(y_true, num_or_size_splits=2, axis=1)
+                y_pred_NDBC, y_pred_ERA5 = tf.split(y_pred, num_or_size_splits=2, axis=1)
+
+                # Calculate the root mean squared error for each feature
+                rmse_NDBC = K.sqrt(K.mean(K.square(y_true_NDBC - y_pred_NDBC), axis=-1))
+                rmse_ERA5 = K.sqrt(K.mean(K.square(y_true_NDBC - y_pred_ERA5), axis=-1)) #Replaced y_true_ERA5 with y_true_NDBC
+
+                # Calculate the weighted loss
+                weighted_loss = alpha * rmse_NDBC + (1 - alpha) * rmse_ERA5
+
+                return weighted_loss
+
+            return loss
+
+        class TransformerBlock(layers.Layer):
+            def __init__(self, embed_dim, num_heads, ff_dim, rate=0.05):
+                super(TransformerBlock, self).__init__()
+                self.att = layers.MultiHeadAttention(num_heads=num_heads,
+                                                     key_dim=embed_dim)
+                self.ffn = keras.Sequential([
+                    layers.Dense(ff_dim, activation="selu"),
+                    layers.Dense(embed_dim),
+                ])
+                self.layernorm1 = layers.LayerNormalization(epsilon=1e-6)
+                self.layernorm2 = layers.LayerNormalization(epsilon=1e-6)
+                self.dropout1 = layers.Dropout(rate)
+                self.dropout2 = layers.Dropout(rate)
+
+            def call(self, inputs, training):
+                attn_output = self.att(inputs, inputs)  # self-attention layer
+                attn_output = self.dropout1(attn_output, training=training)
+                out1 = self.layernorm1(inputs + attn_output)  # layer norm
+                ffn_output = self.ffn(out1)  # feed-forward layer
+                ffn_output = self.dropout2(ffn_output, training=training)
+                return self.layernorm2(out1 + ffn_output)  # layer norm
+
+        #def build_attention_model(lam, num_channels=18, deep_layers=4):
+        #did not implement it as a function
+
+        deep_layers = 4
+        embed_dim = 512  # embed_dim = n_features  # Embedding size for each token
+        num_heads = 10   # Number of attention heads
+        ff_dim = 500     # Hidden layer size in feed forward network inside transformer
+
+        model = Sequential()
+        # model.add(layers.Reshape(target_shape=(1, num_channels)))
+        #Adopting the shape of the input layer while austin was adopting the data to the network
+        model.add(Dense(512, input_shape=(train_X.shape[1], train_X.shape[2])))
+        model.add(BatchNormalization(scale=True, center=True, momentum=0.999))
+
+
+        for a in range(deep_layers):
+            model.add(TransformerBlock(embed_dim, num_heads, ff_dim, rate=0.05))
+            model.add(Dropout(0.05))
+            model.add(LSTM(512, return_sequences=True))
+            model.add(Dropout(0.05))
+            model.add(Dense(512))
+            model.add(Dropout(0.05))
+            model.add(BatchNormalization(scale=True, center=True, momentum=0.999))
+
+        for a in range(4):
+            model.add(Dense(200, ))
+            model.add(Dropout(0.05))
+
+        model.add(keras.layers.Flatten(name='Flatten'))
+
+        #model.add(layers.Dense(num_channels, activation='linear'))
+        model.add(Dense(train_y.shape[1]))
+
+        # learning_rate = 1e-6
+        # decay_rate = 1e-10
+        # momentum = 0.9
+        # sgd = keras.optimizers.legacy.Adam(learning_rate=learning_rate, decay=decay_rate, )
+
+        model.compile( optimizer='adam', loss=custom_loss() )
+
+        # fit network
+        history = model.fit(train_X, train_y, epochs=100, batch_size=64, verbose=1, shuffle=False,
+                            validation_split=0.1)
+
+        return model
+
+    # Transformer model with reduced complexity
+    def transformer(train_X, train_y, alpha):
+        def custom_loss():
+            def loss(y_true, y_pred):
+
+                # Split y_true and y_pred into two features
+                y_true_NDBC, y_true_ERA5 = tf.split(y_true, num_or_size_splits=2, axis=1)
+                y_pred_NDBC, y_pred_ERA5 = tf.split(y_pred, num_or_size_splits=2, axis=1)
+
+                # Calculate the MAE error for each feature
+                mae_NDBC = K.mean(K.abs(y_true_NDBC - y_pred_NDBC), axis=-1)
+                mae_ERA5 = K.mean(K.abs(y_true_NDBC - y_pred_ERA5), axis=-1) #Replaced y_true_ERA5 with y_true_NDBC
+
+                # Calculate the weighted loss
+                weighted_loss = alpha * mae_NDBC + (1 - alpha) * mae_ERA5
+
+                return weighted_loss
+
+            return loss
+
+        class TransformerBlock(layers.Layer):
+            def __init__(self, embed_dim, num_heads, ff_dim, rate=0.05):
+                super(TransformerBlock, self).__init__()
+                self.att = layers.MultiHeadAttention(num_heads=num_heads,
+                                                     key_dim=embed_dim)
+                self.ffn = keras.Sequential([
+                    layers.Dense(ff_dim, activation="selu"),
+                    layers.Dense(embed_dim),
+                ])
+                self.layernorm1 = layers.LayerNormalization(epsilon=1e-6)
+                self.layernorm2 = layers.LayerNormalization(epsilon=1e-6)
+                self.dropout1 = layers.Dropout(rate)
+                self.dropout2 = layers.Dropout(rate)
+
+            def call(self, inputs, training):
+                attn_output = self.att(inputs, inputs)  # self-attention layer
+                attn_output = self.dropout1(attn_output, training=training)
+                out1 = self.layernorm1(inputs + attn_output)  # layer norm
+                ffn_output = self.ffn(out1)  # feed-forward layer
+                ffn_output = self.dropout2(ffn_output, training=training)
+                return self.layernorm2(out1 + ffn_output)  # layer norm
+
+        embed_dim = 128  # embed_dim = n_features  # Embedding size for each token
+        num_heads = 4  # Number of attention heads
+        ff_dim = 128  # Hidden layer size in feed forward network inside transformer
+        dropout_rate = 0.2  # Dropout rate
+
+        model = Sequential()
+        model.add(Dense(embed_dim, input_shape=(train_X.shape[1], train_X.shape[2])))
+        model.add(TransformerBlock(embed_dim, num_heads, ff_dim, rate=dropout_rate))
+        model.add(TransformerBlock(embed_dim, num_heads, ff_dim, rate=dropout_rate))
+        model.add(Flatten(name='Flatten'))
+        model.add(Dense(train_y.shape[1]))
+
+        model.compile(optimizer='adam', loss=custom_loss())
+
+        # fit network
+        history = model.fit(train_X, train_y, epochs=100, batch_size=64, verbose=1, shuffle=False,
+                            validation_split=0.1)
+
+        return model
+
+
     model_dictionary = {
-        "LSTM": LSTM,
-        "GRU": GRU,
-        "CNN": CNN,
-        "TCN": TCN,
+        #"LSTM": LSTM,
+        #"GRU": GRU,
+        #"CNN": CNN,
+        #"TCN": TCN,
+
+        #publication:
+        "LSTM_2": LSTM_2,
+        "CNN_2": CNN_2,
+        "transformer": transformer
     }
 
     @staticmethod
