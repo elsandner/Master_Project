@@ -1537,13 +1537,11 @@ class Models():
 
                 # Calculate the root mean squared error for each feature
                 mae_NDBC = K.mean(K.abs(y_true_NDBC - y_pred_NDBC), axis=-1)
-                mae_ERA5 = K.mean(K.abs(y_true_NDBC - y_pred_ERA5), axis=-1) #Replaced y_true_ERA5 with y_true_NDBC
+                mae_ERA5 = K.mean(K.abs(y_true_NDBC - y_pred_ERA5), axis=-1)   # Replaced y_true_ERA5 with y_true_NDBC
 
                 # Calculate the weighted loss
                 weighted_loss = alpha * mae_NDBC + (1 - alpha) * mae_ERA5
-
                 return weighted_loss
-
             return loss
 
         # design network
@@ -1558,7 +1556,8 @@ class Models():
         model.add(Dense(train_X.shape[2]))
 
         model.compile(optimizer='adam',
-                      loss=custom_loss(),
+                      #loss=custom_loss(),
+                      loss = 'mae'
                       )
 
         # fit network
@@ -1765,6 +1764,45 @@ class Models():
 
         return model
 
+    def LSTM_3D(train_X, train_y, alpha):
+
+        def custom_loss():
+            def loss(y_true, y_pred):
+                # Split y_true and y_pred into two features along the last axis
+                y_true_NDBC, y_true_ERA5 = tf.split(y_true, num_or_size_splits=2, axis=-1)
+                y_pred_NDBC, y_pred_ERA5 = tf.split(y_pred, num_or_size_splits=2, axis=-1)
+
+                # Calculate the mean absolute error for each feature
+                mae_NDBC = K.mean(K.abs(y_true_NDBC - y_pred_NDBC), axis=-1)
+                mae_ERA5 = K.mean(K.abs(y_true_NDBC - y_pred_ERA5), axis=-1)
+
+                # Calculate the weighted loss
+                weighted_loss = alpha * mae_NDBC + (1 - alpha) * mae_ERA5
+
+                return weighted_loss
+
+            return loss
+
+        # Design network
+        model = Sequential()
+        model.add(LSTM(128, input_shape=(train_X.shape[1], train_X.shape[2]), return_sequences=True))
+        model.add(Dropout(0.2))
+        model.add(LSTM(64, return_sequences=True))
+        model.add(Dropout(0.2))
+        model.add(LSTM(32, return_sequences=True))
+        model.add(Dropout(0.2))
+        model.add(LSTM(16, return_sequences=True))
+        model.add(Dense(train_X.shape[2]))
+
+        model.compile(optimizer='adam', loss=custom_loss())
+
+        # Fit network
+        history = model.fit(train_X, train_y, epochs=100, batch_size=64, verbose=1, shuffle=False, validation_split=0.1)
+
+        return model
+
+
+
 
     model_dictionary = {
         #"LSTM": LSTM,
@@ -1775,7 +1813,8 @@ class Models():
         #publication:
         "LSTM_2": LSTM_2,
         "CNN_2": CNN_2,
-        "transformer": transformer
+        "transformer": transformer,
+        "LSTM_3D": LSTM_3D
     }
 
     @staticmethod
